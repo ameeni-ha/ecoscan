@@ -30,6 +30,18 @@ const postSchema = new mongoose.Schema(
       default: "published",
       index: true,
     },
+    images: {
+      type: [
+        {
+          url: { type: String, required: true, trim: true },
+          filename: { type: String, required: true, trim: true },
+          originalName: { type: String, default: "", trim: true },
+          mimeType: { type: String, default: "", trim: true },
+          size: { type: Number, default: 0 },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );

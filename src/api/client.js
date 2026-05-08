@@ -1,14 +1,22 @@
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:4000/api";
+import { apiUrl } from "../utils/apiUrls";
 
 export async function apiRequest(path, { method = "GET", token, body } = {}) {
-  const headers = { "Content-Type": "application/json" };
+  const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
+  const isSerializedString = typeof body === "string";
+  const headers = isFormData ? {} : { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
+  let bodyOut;
+  if (!body) bodyOut = undefined;
+  else if (isFormData) bodyOut = body;
+  else if (isSerializedString) bodyOut = body;
+  else bodyOut = JSON.stringify(body);
+
+  const res = await fetch(apiUrl(path), {
     method,
     headers,
     credentials: "include",
-    body: body ? JSON.stringify(body) : undefined,
+    body: bodyOut,
   });
 
   const data = await res.json().catch(() => ({}));

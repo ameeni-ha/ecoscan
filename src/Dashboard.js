@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
+import { canUseScan } from "./utils/permissions";
 
 const Dashboard = () => {
   const { user } = useAuth();
@@ -38,9 +39,16 @@ const Dashboard = () => {
               <h2>Prochaines etapes</h2>
               <p>Accéder rapidement aux fonctionnalités principales.</p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 12 }}>
-                <button type="button" className="home-primary-btn" onClick={() => navigate("/scan")}>
-                  Scanner un objet
-                </button>
+                {canUseScan(user) ? (
+                  <button type="button" className="home-primary-btn" onClick={() => navigate("/scan")}>
+                    Scanner un objet
+                  </button>
+                ) : (
+                  <p className="form-info" style={{ margin: 0, maxWidth: 320 }}>
+                    Compte centre de collecte : le scan est réservé aux collecteurs. Utilisez le forum
+                    et les fiches centres pour échanger avec la communauté.
+                  </p>
+                )}
                 <button type="button" className="home-secondary-btn" onClick={() => navigate("/forum")}>
                   Forum
                 </button>

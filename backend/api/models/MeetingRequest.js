@@ -8,9 +8,10 @@ const meetingRequestSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    /** Identifiant document `RecyclingCenter` (liste /centres) */
     centerUserId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
+      ref: "RecyclingCenter",
       required: true,
       index: true,
     },

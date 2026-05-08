@@ -119,6 +119,11 @@ const userSchema = new mongoose.Schema(
         trim: true,
       },
     },
+    points: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
     refreshTokens: {
       type: [refreshTokenSchema],
       default: [],

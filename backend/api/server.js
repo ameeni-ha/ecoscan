@@ -1,21 +1,43 @@
 require("dotenv").config({ path: __dirname + "/.env" });
 
 const express = require("express");
+const axios = require("axios");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
 const User = require("./models/User");
-const Scan = require("./models/Scan");
+const RecyclingCenter = require("./models/RecyclingCenter");
 const Post = require("./models/Post");
 const Comment = require("./models/Comment");
+const Scan = require("./models/Scan");
 const MeetingRequest = require("./models/MeetingRequest");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
-const MONGO_URI = process.env.MONGO_URI;
+
+const corsOrigins = (() => {
+  const raw = process.env.CLIENT_URL?.trim();
+  if (raw) {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  return ["http://localhost:3000", "http://127.0.0.1:3000"];
+})();
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+if (!process.env.MONGO_URI && !IS_PRODUCTION) {
+  console.info(
+    "MongoDB: MONGO_URI non defini — utilisation de mongodb://127.0.0.1:27017/ecoscan (voir backend/api/.env.example)."
+  );
+}
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  (!IS_PRODUCTION ? "mongodb://127.0.0.1:27017/ecoscan" : undefined);
+
 const ACCESS_TOKEN_SECRET =
   process.env.ACCESS_TOKEN_SECRET || process.env.TOKEN_SECRET || "ecoscan-dev-secret";
 const REFRESH_TOKEN_SECRET =
@@ -23,7 +45,75 @@ const REFRESH_TOKEN_SECRET =
 const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || "15m";
 const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "7d";
 const REFRESH_COOKIE_NAME = "ecoscan_refresh_token";
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
+
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.nchc.org.tw/api/interpreter",
+];
+
+// Fail fast when MongoDB is down (avoid mongoose buffering timeouts)
+mongoose.set("bufferCommands", false);
+
+let mongoMemoryServer = null;
+
+const startInMemoryMongo = async () => {
+  if (mongoMemoryServer) return mongoMemoryServer.getUri();
+
+  // Lazy require so production builds don't need it.
+  // eslint-disable-next-line global-require
+  const { MongoMemoryServer } = require("mongodb-memory-server");
+  mongoMemoryServer = await MongoMemoryServer.create({
+    instance: { dbName: "ecoscan" },
+  });
+  return mongoMemoryServer.getUri();
+};
+
+const connectWithTimeout = async (uri, options, timeoutMs) => {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error("MongoDB connection timeout")), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([mongoose.connect(uri, options), timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const requireDatabase = (req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      message:
+        "Base de donnees indisponible. Verifie la connexion MongoDB puis reessaie.",
+    });
+  }
+  return next();
+};
+
+const runOverpassQuery = async (query) => {
+  const overpassBody = new URLSearchParams({ data: query }).toString();
+  let lastError = null;
+
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    try {
+      const response = await axios.post(endpoint, overpassBody, {
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "ecoscan/1.0 (recycling centers lookup)",
+        },
+        timeout: 30000,
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError || new Error("Overpass request failed");
+};
 
 const sanitizeUser = (user) => ({
   id: user._id.toString(),
@@ -35,6 +125,7 @@ const sanitizeUser = (user) => ({
   phone: user.phone,
   adresse: user.adresse,
   collectionCenter: user.collectionCenter,
+  points: user.points || 0,
   createdAt: user.createdAt?.toISOString?.() || user.createdAt,
 });
 
@@ -53,6 +144,76 @@ const ALLOWED_MATERIALS = [
   "electronique",
   "organique",
 ];
+
+/** Étiquettes `materialsAccepted` du modèle RecyclingCenter (plastic, glass, …) */
+const SCAN_MATERIAL_TO_CENTER_TAGS = {
+  plastique: ["plastic"],
+  verre: ["glass"],
+  papier_carton: ["paper"],
+  metal: ["metal"],
+  electronique: ["electronic"],
+  organique: ["organic"],
+};
+
+const haversineKm = (lat1, lng1, lat2, lng2) => {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
+const centerAcceptsScanMaterial = (center, scanMaterialKey) => {
+  const mats = Array.isArray(center.materialsAccepted) ? center.materialsAccepted : [];
+  const tags = SCAN_MATERIAL_TO_CENTER_TAGS[scanMaterialKey];
+  if (!tags || !tags.length) return true;
+  if (!mats.length || mats.includes("mixed")) return true;
+  return mats.some((m) => tags.includes(m));
+};
+
+// Material knowledge base for scan results
+const MATERIAL_DATABASE = {
+  plastique: {
+    recyclable: true,
+    points: 5,
+    instructions:
+      "Rincez et videz les contenants. Retirez les bouchons et les étiquettes. Mettez dans le bac de recyclage plastique.",
+  },
+  verre: {
+    recyclable: true,
+    points: 3,
+    instructions:
+      "Nettoyez le verre. Retirez les bouchons en métal ou plastique. Déposez dans le bac de recyclage du verre.",
+  },
+  papier_carton: {
+    recyclable: true,
+    points: 2,
+    instructions:
+      "Aplatissez les cartons. Enlevez le polystyrène ou les plastiques. Mettez dans le bac à papier/carton.",
+  },
+  metal: {
+    recyclable: true,
+    points: 4,
+    instructions:
+      "Rincez les conserves. Aplatissez-les pour économiser l'espace. Déposez dans le bac de recyclage des métaux.",
+  },
+  electronique: {
+    recyclable: true,
+    points: 10,
+    instructions:
+      "Ne mettez pas à la poubelle! Apportez à un centre de collecte d'appareils électroniques pour un traitement sécurisé.",
+  },
+  organique: {
+    recyclable: true,
+    points: 1,
+    instructions:
+      "Composez les déchets organiques dans un composteur ou mettez dans le bac de compostage.",
+  },
+};
 
 const createAccessToken = (user) =>
   jwt.sign({ sub: user._id.toString(), role: user.role }, ACCESS_TOKEN_SECRET, {
@@ -147,13 +308,60 @@ const issueTokensForUser = async (user, previousTokenIdHash = null) => {
 
 const connectToDatabase = async () => {
   if (!MONGO_URI) {
-    throw new Error("La variable MONGO_URI est requise");
+    console.warn("MONGO_URI manquante: demarrage sans base de donnees");
+    return;
   }
 
-  await mongoose.connect(MONGO_URI);
+  const connectOptions = {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+  };
+
+  try {
+    await connectWithTimeout(MONGO_URI, connectOptions, 7000);
+  } catch (error) {
+    const fallbackUri = process.env.LOCAL_MONGO_URI;
+
+    if (process.env.NODE_ENV === "production") {
+      throw error;
+    }
+
+    if (fallbackUri) {
+      console.error(
+        `Connexion MongoDB impossible (${error.message}). Tentative locale: ${fallbackUri}`
+      );
+      try {
+        await connectWithTimeout(fallbackUri, connectOptions, 5000);
+        return;
+      } catch (localError) {
+        if (process.env.ENABLE_IN_MEMORY_MONGO === "false") {
+          throw localError;
+        }
+
+        console.error(
+          `Connexion MongoDB locale impossible (${localError.message}). Demarrage Mongo in-memory...`
+        );
+      }
+    } else {
+      console.error(
+        `Connexion MongoDB impossible (${error.message}). Demarrage Mongo in-memory...`
+      );
+    }
+
+    const inMemoryUri = await startInMemoryMongo();
+    await connectWithTimeout(inMemoryUri, connectOptions, 7000);
+    console.log("MongoDB in-memory demarree pour le developpement.");
+  }
 };
 
 const authMiddleware = async (req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      message:
+        "Base de donnees indisponible. Verifie la connexion MongoDB puis reessaie.",
+    });
+  }
+
   const header = req.headers.authorization || "";
   const [, token] = header.split(" ");
 
@@ -176,60 +384,303 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-const requireRole = (...roles) => (req, res, next) => {
-  const role = req.user?.role || "client";
-  if (!roles.includes(role)) {
-    return res.status(403).json({ message: "Acces refuse" });
-  }
-  return next();
-};
+const corsOriginOption =
+  corsOrigins.length === 0
+    ? ["http://localhost:3000", "http://127.0.0.1:3000"]
+    : corsOrigins.length === 1
+      ? corsOrigins[0]
+      : corsOrigins;
 
-const isModerator = (role) => ["moderator", "admin"].includes(role);
+const corsDevelopmentOptions =
+  !IS_PRODUCTION && !process.env.CLIENT_URL?.trim()
+    ? { origin: true, credentials: true }
+    : { origin: corsOriginOption, credentials: true };
 
-const normalizeTags = (value) => {
-  if (!value) return [];
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => String(item).trim().toLowerCase())
-      .filter(Boolean)
-      .slice(0, 10);
-  }
-  return String(value)
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean)
-    .slice(0, 10);
-};
-
-const computeScanResult = ({ label, material }) => {
-  const normalizedMaterial = String(material || "").trim().toLowerCase();
-  const safeLabel = String(label || "").trim();
-
-  const recyclableMaterials = new Set(["plastique", "verre", "papier_carton", "metal", "electronique"]);
-  const recyclable = recyclableMaterials.has(normalizedMaterial);
-  const points = recyclable ? 10 : 2;
-
-  const instructions = recyclable
-    ? `Déposez "${safeLabel || "cet objet"}" dans la filière ${normalizedMaterial || "adaptée"} (rincez si nécessaire).`
-    : `Vérifiez les consignes locales: "${safeLabel || "cet objet"}" peut nécessiter une collecte spécialisée.`;
-
-  return { recyclable, points, instructions };
-};
-
-app.use(
-  cors({
-    origin: CLIENT_URL,
-    credentials: true,
-  })
-);
+app.use(cors(corsDevelopmentOptions));
 app.use(cookieParser());
-app.use(express.json());
+// Utiliser un body parser qui accepte JSON et multipart
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
+
+const uploadsDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+app.use("/uploads", express.static(uploadsDir));
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || "");
+      const safeExt = ext && ext.length <= 10 ? ext : "";
+      cb(null, `${Date.now()}_${crypto.randomBytes(8).toString("hex")}${safeExt}`);
+    },
+  }),
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB each
+    files: 6,
+  },
+  fileFilter: (req, file, cb) => {
+    const allowed = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new Error("Type de fichier non supporté (images uniquement)."));
+    }
+    return cb(null, true);
+  },
+});
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.post("/api/auth/register", (req, res) => {
+// Update authenticated user profile
+app.patch("/api/users/me", authMiddleware, async (req, res) => {
+  try {
+    const { firstName, lastName, phone, adresse, password } = req.body || {};
+    const updates = {};
+
+    if (firstName !== undefined) updates.firstName = String(firstName).trim();
+    if (lastName !== undefined) updates.lastName = String(lastName).trim();
+    if (phone !== undefined) updates.phone = String(phone).trim();
+    if (adresse !== undefined) updates.adresse = String(adresse).trim();
+
+    if (updates.firstName !== undefined && !updates.firstName) {
+      return res.status(400).json({ message: "Prénom invalide" });
+    }
+    if (updates.lastName !== undefined && !updates.lastName) {
+      return res.status(400).json({ message: "Nom invalide" });
+    }
+
+    if (password) {
+      const nextPassword = String(password);
+      if (nextPassword.length < 6) {
+        return res.status(400).json({ message: "Le mot de passe doit contenir au moins 6 caractères" });
+      }
+      updates.passwordHash = await User.hashPassword(nextPassword);
+      // invalidate refresh tokens when password changes
+      updates.refreshTokens = [];
+    }
+
+    const user = await User.findByIdAndUpdate(req.user._id, updates, {
+      new: true,
+      runValidators: true,
+    });
+
+    return res.json({ user: sanitizeUser(user) });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+// Forum: list posts
+app.get("/api/forum/posts", authMiddleware, async (req, res) => {
+  try {
+    const posts = await Post.find({ status: { $in: ["published", "hidden"] } })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    const authorIds = [...new Set(posts.map((p) => p.authorId.toString()))];
+    const authors = await User.find({ _id: { $in: authorIds } })
+      .select("firstName lastName email accountType")
+      .lean();
+    const authorById = new Map(authors.map((u) => [u._id.toString(), u]));
+
+    const formatted = posts.map((p) => ({
+      id: p._id.toString(),
+      title: p.title,
+      content: p.content,
+      tags: p.tags || [],
+      status: p.status,
+      images: Array.isArray(p.images) ? p.images : [],
+      author: authorById.get(p.authorId.toString())
+        ? {
+            firstName: authorById.get(p.authorId.toString()).firstName,
+            lastName: authorById.get(p.authorId.toString()).lastName,
+            accountType: authorById.get(p.authorId.toString()).accountType || null,
+          }
+        : null,
+      excerpt:
+        typeof p.content === "string"
+          ? p.content.replace(/\s+/g, " ").trim().slice(0, 240)
+          : "",
+      previewImage: Array.isArray(p.images) && p.images[0]?.url ? p.images[0].url : "",
+      createdAt: p.createdAt,
+    }));
+
+    return res.json({ posts: formatted });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+// Forum: create post (supports multiple photos: photos[])
+app.post("/api/forum/posts", authMiddleware, upload.array("photos", 6), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const title = String(body.title || "").trim();
+    const content = String(body.content || "").trim();
+    const tagsRaw = body.tags;
+
+    if (!title || !content) {
+      return res.status(400).json({ message: "Titre et message requis" });
+    }
+
+    const tags =
+      typeof tagsRaw === "string" && tagsRaw.trim()
+        ? tagsRaw
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean)
+            .slice(0, 10)
+        : [];
+
+    const files = Array.isArray(req.files) ? req.files : [];
+    const images = files.map((f) => ({
+      url: `/uploads/${f.filename}`,
+      filename: f.filename,
+      originalName: f.originalname || "",
+      mimeType: f.mimetype || "",
+      size: f.size || 0,
+    }));
+
+    const post = await Post.create({
+      authorId: req.user._id,
+      title,
+      content,
+      tags,
+      images,
+      status: "published",
+    });
+
+    return res.status(201).json({ postId: post._id.toString() });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+// Forum: get post details + comments
+app.get("/api/forum/posts/:id", authMiddleware, async (req, res) => {
+  try {
+    const post = await Post.findById(req.params.id).lean();
+    if (!post) return res.status(404).json({ message: "Post introuvable" });
+
+    const author = await User.findById(post.authorId)
+      .select("firstName lastName accountType")
+      .lean();
+    const comments = await Comment.find({ postId: post._id })
+      .sort({ createdAt: 1 })
+      .limit(200)
+      .lean();
+
+    const commentAuthorIds = [...new Set(comments.map((c) => c.authorId.toString()))];
+    const commentAuthors = await User.find({ _id: { $in: commentAuthorIds } })
+      .select("firstName lastName accountType")
+      .lean();
+    const commentAuthorById = new Map(commentAuthors.map((u) => [u._id.toString(), u]));
+
+    return res.json({
+      post: {
+        id: post._id.toString(),
+        title: post.title,
+        content: post.content,
+        tags: post.tags || [],
+        status: post.status,
+        images: Array.isArray(post.images) ? post.images : [],
+        author: author
+          ? {
+              firstName: author.firstName,
+              lastName: author.lastName,
+              accountType: author.accountType || null,
+            }
+          : null,
+        createdAt: post.createdAt,
+      },
+      comments: comments.map((c) => ({
+        id: c._id.toString(),
+        content: c.content,
+        status: c.status,
+        parentCommentId: c.parentCommentId ? c.parentCommentId.toString() : null,
+        createdAt: c.createdAt,
+        author: commentAuthorById.get(c.authorId.toString())
+          ? {
+              firstName: commentAuthorById.get(c.authorId.toString()).firstName,
+              lastName: commentAuthorById.get(c.authorId.toString()).lastName,
+              accountType: commentAuthorById.get(c.authorId.toString()).accountType || null,
+            }
+          : null,
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+const forumCanReply = (user) => {
+  if (!user) return false;
+  if (user.role === "admin" || user.role === "moderator") return true;
+  return ["collecteur", "centre_de_collecte"].includes(user.accountType);
+};
+
+/** Collecteurs, centres de collecte (et admins / modérateurs) peuvent commenter ou répondre. */
+app.post("/api/forum/posts/:id/comments", authMiddleware, async (req, res) => {
+  try {
+    const content = String(req.body?.content || "").trim();
+    if (!content) return res.status(400).json({ message: "Commentaire requis" });
+
+    if (!forumCanReply(req.user)) {
+      return res.status(403).json({
+        message: "Réponse forum réservée aux comptes collecteur ou centre de collecte.",
+      });
+    }
+
+    const post = await Post.findById(req.params.id).select("_id").lean();
+    if (!post) return res.status(404).json({ message: "Post introuvable" });
+
+    const parentRaw = req.body?.parentCommentId;
+    let parentCommentId = null;
+
+    if (parentRaw) {
+      if (!mongoose.Types.ObjectId.isValid(String(parentRaw))) {
+        return res.status(400).json({ message: "Identifiant de commentaire parent invalide" });
+      }
+
+      const parentDoc = await Comment.findOne({
+        _id: parentRaw,
+        postId: post._id,
+        status: "published",
+      }).lean();
+
+      if (!parentDoc) {
+        return res.status(400).json({ message: "Commentaire parent introuvable" });
+      }
+
+      if (parentDoc.parentCommentId) {
+        return res.status(400).json({
+          message: "Une seule mise en niveau est autorisée (réponse au commentaire principal uniquement)",
+        });
+      }
+
+      parentCommentId = parentDoc._id;
+    }
+
+    const comment = await Comment.create({
+      postId: post._id,
+      authorId: req.user._id,
+      parentCommentId,
+      content,
+      status: "published",
+    });
+
+    return res.status(201).json({ commentId: comment._id.toString() });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+app.post("/api/auth/register", requireDatabase, (req, res) => {
   const {
     firstName,
     lastName,
@@ -343,7 +794,7 @@ app.post("/api/auth/register", (req, res) => {
   });
 });
 
-app.post("/api/auth/login", (req, res) => {
+app.post("/api/auth/login", requireDatabase, (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -377,7 +828,7 @@ app.post("/api/auth/login", (req, res) => {
   });
 });
 
-app.post("/api/auth/refresh", (req, res) => {
+app.post("/api/auth/refresh", requireDatabase, (req, res) => {
   return (async () => {
     const refreshToken = req.cookies[REFRESH_COOKIE_NAME];
 
@@ -432,7 +883,7 @@ app.post("/api/auth/refresh", (req, res) => {
   });
 });
 
-app.post("/api/auth/logout", (req, res) => {
+app.post("/api/auth/logout", requireDatabase, (req, res) => {
   return (async () => {
     const refreshToken = req.cookies[REFRESH_COOKIE_NAME];
 
@@ -475,445 +926,645 @@ app.get("/api/auth/me", authMiddleware, (req, res) => {
   res.json({ user: sanitizeUser(req.user) });
 });
 
-app.patch("/api/users/me", authMiddleware, (req, res) => {
-  const { firstName, lastName, phone, adresse, password } = req.body || {};
-
-  return (async () => {
-    if (firstName !== undefined) req.user.firstName = String(firstName).trim();
-    if (lastName !== undefined) req.user.lastName = String(lastName).trim();
-    if (phone !== undefined) req.user.phone = String(phone).trim();
-    if (adresse !== undefined) req.user.adresse = String(adresse).trim();
-
-    if (password) {
-      req.user.passwordHash = await User.hashPassword(String(password));
-      req.user.refreshTokens = [];
+// Get all recycling centers with filters
+app.get("/api/centers", async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        message:
+          "Base de donnees indisponible. Utilise la source OpenStreetMap ou verifie la connexion MongoDB.",
+      });
     }
 
-    await req.user.save();
-    return res.json({ user: sanitizeUser(req.user) });
-  })().catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
+    const { city, material, includeUnverified = "true" } = req.query;
+    const filter = includeUnverified !== "false" ? {} : { isVerified: true };
 
-app.get("/api/centers", (req, res) => {
-  const { city, material } = req.query || {};
-  const filter = { accountType: "centre_de_collecte" };
-
-  if (city) {
-    filter["collectionCenter.city"] = new RegExp(String(city).trim(), "i");
-  }
-
-  if (material && ALLOWED_MATERIALS.includes(String(material).trim().toLowerCase())) {
-    filter["collectionCenter.materialsAccepted"] = String(material).trim().toLowerCase();
-  }
-
-  return User.find(filter)
-    .sort({ createdAt: -1 })
-    .limit(100)
-    .then((users) =>
-      res.json({
-        centers: users.map((user) => ({
-          id: user._id.toString(),
-          centerName: user.collectionCenter?.centerName || "",
-          managerName: user.collectionCenter?.managerName || "",
-          centerType: user.collectionCenter?.centerType || "",
-          materialsAccepted: user.collectionCenter?.materialsAccepted || [],
-          city: user.collectionCenter?.city || "",
-          district: user.collectionCenter?.district || "",
-          openingHours: user.collectionCenter?.openingHours || "",
-          capacityPerDayKg: user.collectionCenter?.capacityPerDayKg ?? null,
-          description: user.collectionCenter?.description || "",
-          phone: user.phone || "",
-        })),
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.post("/api/scans", authMiddleware, (req, res) => {
-  const { label, material, photoUrl } = req.body || {};
-
-  if (!label || !material) {
-    return res.status(400).json({ message: "label et material sont requis" });
-  }
-
-  const normalizedMaterial = String(material).trim().toLowerCase();
-  if (!ALLOWED_MATERIALS.includes(normalizedMaterial)) {
-    return res.status(400).json({ message: "Material invalide" });
-  }
-
-  const result = computeScanResult({ label, material: normalizedMaterial });
-
-  return Scan.create({
-    userId: req.user._id,
-    label: String(label).trim(),
-    material: normalizedMaterial,
-    recyclable: result.recyclable,
-    instructions: result.instructions,
-    points: result.points,
-    photoUrl: photoUrl ? String(photoUrl).trim() : "",
-  })
-    .then((scan) =>
-      res.status(201).json({
-        scan: {
-          id: scan._id.toString(),
-          label: scan.label,
-          material: scan.material,
-          recyclable: scan.recyclable,
-          instructions: scan.instructions,
-          points: scan.points,
-          photoUrl: scan.photoUrl,
-          createdAt: scan.createdAt?.toISOString?.() || scan.createdAt,
-        },
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.get("/api/scans/my", authMiddleware, (req, res) => {
-  return Scan.find({ userId: req.user._id })
-    .sort({ createdAt: -1 })
-    .limit(50)
-    .then((scans) =>
-      res.json({
-        scans: scans.map((scan) => ({
-          id: scan._id.toString(),
-          label: scan.label,
-          material: scan.material,
-          recyclable: scan.recyclable,
-          instructions: scan.instructions,
-          points: scan.points,
-          photoUrl: scan.photoUrl,
-          createdAt: scan.createdAt?.toISOString?.() || scan.createdAt,
-        })),
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.get("/api/scans/:id", authMiddleware, (req, res) => {
-  return Scan.findById(req.params.id)
-    .then((scan) => {
-      if (!scan) return res.status(404).json({ message: "Scan introuvable" });
-      const isOwner = scan.userId.toString() === req.user._id.toString();
-      if (!isOwner && req.user.role !== "admin") {
-        return res.status(403).json({ message: "Acces refuse" });
-      }
-      return res.json({
-        scan: {
-          id: scan._id.toString(),
-          label: scan.label,
-          material: scan.material,
-          recyclable: scan.recyclable,
-          instructions: scan.instructions,
-          points: scan.points,
-          photoUrl: scan.photoUrl,
-          createdAt: scan.createdAt?.toISOString?.() || scan.createdAt,
-        },
-      });
-    })
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.get("/api/leaderboard", (req, res) => {
-  return Scan.aggregate([
-    { $group: { _id: "$userId", points: { $sum: "$points" }, scans: { $sum: 1 } } },
-    { $sort: { points: -1, scans: -1 } },
-    { $limit: 20 },
-  ])
-    .then(async (rows) => {
-      const userIds = rows.map((row) => row._id);
-      const users = await User.find({ _id: { $in: userIds } });
-      const byId = new Map(users.map((u) => [u._id.toString(), u]));
-      return res.json({
-        leaderboard: rows.map((row, index) => {
-          const user = byId.get(row._id.toString());
-          return {
-            rank: index + 1,
-            user: user ? sanitizeUser(user) : { id: row._id.toString(), firstName: "Utilisateur", lastName: "" },
-            points: row.points,
-            scans: row.scans,
-          };
-        }),
-      });
-    })
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.get("/api/forum/posts", authMiddleware, (req, res) => {
-  const role = req.user?.role || "client";
-  const { search, tag } = req.query || {};
-
-  const filter = {};
-  if (!isModerator(role)) {
-    filter.status = "published";
-  }
-  if (tag) {
-    filter.tags = String(tag).trim().toLowerCase();
-  }
-  if (search) {
-    const rx = new RegExp(String(search).trim(), "i");
-    filter.$or = [{ title: rx }, { content: rx }];
-  }
-
-  return Post.find(filter)
-    .sort({ createdAt: -1 })
-    .limit(50)
-    .populate("authorId", "firstName lastName email role accountType phone adresse collectionCenter createdAt")
-    .then((posts) =>
-      res.json({
-        posts: posts.map((post) => ({
-          id: post._id.toString(),
-          title: post.title,
-          content: post.content,
-          tags: post.tags || [],
-          status: post.status,
-          author: post.authorId ? sanitizeUser(post.authorId) : null,
-          createdAt: post.createdAt?.toISOString?.() || post.createdAt,
-          updatedAt: post.updatedAt?.toISOString?.() || post.updatedAt,
-        })),
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.post("/api/forum/posts", authMiddleware, (req, res) => {
-  const { title, content, tags } = req.body || {};
-  if (!title || !content) {
-    return res.status(400).json({ message: "title et content sont requis" });
-  }
-
-  return Post.create({
-    authorId: req.user._id,
-    title: String(title).trim(),
-    content: String(content).trim(),
-    tags: normalizeTags(tags),
-  })
-    .then((post) =>
-      res.status(201).json({
-        post: {
-          id: post._id.toString(),
-          title: post.title,
-          content: post.content,
-          tags: post.tags || [],
-          status: post.status,
-          createdAt: post.createdAt?.toISOString?.() || post.createdAt,
-        },
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.get("/api/forum/posts/:id", authMiddleware, (req, res) => {
-  const role = req.user?.role || "client";
-
-  return Post.findById(req.params.id)
-    .populate("authorId", "firstName lastName email role accountType phone adresse collectionCenter createdAt")
-    .then(async (post) => {
-      if (!post) return res.status(404).json({ message: "Post introuvable" });
-      if (post.status !== "published" && !isModerator(role)) {
-        return res.status(403).json({ message: "Acces refuse" });
-      }
-
-      const commentFilter = { postId: post._id };
-      if (!isModerator(role)) commentFilter.status = "published";
-
-      const comments = await Comment.find(commentFilter)
-        .sort({ createdAt: 1 })
-        .limit(200)
-        .populate("authorId", "firstName lastName email role accountType phone adresse collectionCenter createdAt");
-
-      return res.json({
-        post: {
-          id: post._id.toString(),
-          title: post.title,
-          content: post.content,
-          tags: post.tags || [],
-          status: post.status,
-          author: post.authorId ? sanitizeUser(post.authorId) : null,
-          createdAt: post.createdAt?.toISOString?.() || post.createdAt,
-          updatedAt: post.updatedAt?.toISOString?.() || post.updatedAt,
-        },
-        comments: comments.map((comment) => ({
-          id: comment._id.toString(),
-          content: comment.content,
-          status: comment.status,
-          author: comment.authorId ? sanitizeUser(comment.authorId) : null,
-          createdAt: comment.createdAt?.toISOString?.() || comment.createdAt,
-        })),
-      });
-    })
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.post("/api/forum/posts/:id/comments", authMiddleware, (req, res) => {
-  const { content } = req.body || {};
-  if (!content) return res.status(400).json({ message: "content est requis" });
-
-  return Post.findById(req.params.id)
-    .then((post) => {
-      if (!post) return res.status(404).json({ message: "Post introuvable" });
-      return Comment.create({
-        postId: post._id,
-        authorId: req.user._id,
-        content: String(content).trim(),
-      });
-    })
-    .then((comment) =>
-      res.status(201).json({
-        comment: {
-          id: comment._id.toString(),
-          content: comment.content,
-          status: comment.status,
-          createdAt: comment.createdAt?.toISOString?.() || comment.createdAt,
-        },
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.patch("/api/forum/posts/:id/moderate", authMiddleware, requireRole("moderator", "admin"), (req, res) => {
-  const { status } = req.body || {};
-  if (!["published", "hidden"].includes(status)) {
-    return res.status(400).json({ message: "status invalide" });
-  }
-
-  return Post.findByIdAndUpdate(req.params.id, { status }, { new: true })
-    .then((post) => {
-      if (!post) return res.status(404).json({ message: "Post introuvable" });
-      return res.json({ post: { id: post._id.toString(), status: post.status } });
-    })
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
-
-app.patch(
-  "/api/forum/comments/:id/moderate",
-  authMiddleware,
-  requireRole("moderator", "admin"),
-  (req, res) => {
-    const { status } = req.body || {};
-    if (!["published", "hidden"].includes(status)) {
-      return res.status(400).json({ message: "status invalide" });
+    if (city) {
+      filter.city = { $regex: city, $options: "i" };
     }
 
-    return Comment.findByIdAndUpdate(req.params.id, { status }, { new: true })
-      .then((comment) => {
-        if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
-        return res.json({ comment: { id: comment._id.toString(), status: comment.status } });
-      })
-      .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
+    if (material) {
+      filter.materialsAccepted = { $in: [material] };
+    }
+
+    console.log("Fetching centers with filter:", filter);
+
+    const centers = await RecyclingCenter.find(filter)
+      .select(
+        "centerName managerName city address district openingHours phone materialsAccepted description latitude longitude rating totalReviews capacityPerDayKg centerType registrationNumber"
+      )
+      .limit(100)
+      .lean();
+
+    console.log(`Found ${centers.length} centers`);
+
+    const formattedCenters = centers.map((center) => ({
+      _id: center._id,
+      id: center._id.toString(),
+      centerName: center.centerName,
+      managerName: center.managerName,
+      city: center.city,
+      address: center.address,
+      district: center.district,
+      openingHours: center.openingHours,
+      phone: center.phone,
+      materialsAccepted: center.materialsAccepted,
+      description: center.description,
+      latitude: center.latitude,
+      longitude: center.longitude,
+      rating: center.rating,
+      totalReviews: center.totalReviews,
+      capacityPerDayKg: center.capacityPerDayKg,
+      centerType: center.centerType,
+    }));
+
+    res.json({ centers: formattedCenters, count: formattedCenters.length });
+  } catch (error) {
+    console.error("Error fetching centers:", error.message);
+    res.status(500).json({ error: "Failed to fetch centers", message: error.message });
   }
-);
+});
 
-app.post("/api/meetings", authMiddleware, (req, res) => {
-  const { centerUserId, preferredDate, message } = req.body || {};
-  if (!centerUserId) return res.status(400).json({ message: "centerUserId est requis" });
-
-  return User.findById(centerUserId)
-    .then((center) => {
-      if (!center || center.accountType !== "centre_de_collecte") {
-        return res.status(400).json({ message: "Centre de collecte invalide" });
-      }
-      const parsedDate = preferredDate ? new Date(preferredDate) : null;
-      if (parsedDate && Number.isNaN(parsedDate.getTime())) {
-        return res.status(400).json({ message: "preferredDate invalide" });
-      }
-      return MeetingRequest.create({
-        requesterId: req.user._id,
-        centerUserId: center._id,
-        preferredDate: parsedDate,
-        message: message ? String(message).trim() : "",
+// Centres géolocalisés triés par distance (docs Mongo avec latitude/longitude)
+app.get("/api/centers/nearby", async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        message: "Base de donnees indisponible pour les centres a proximite.",
       });
+    }
+
+    const lat = Number.parseFloat(req.query.lat);
+    const lng = Number.parseFloat(req.query.lng);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit || "8", 10) || 8, 1), 25);
+    const materialRaw = typeof req.query.material === "string" ? req.query.material.trim() : "";
+
+    if (Number.isNaN(lat) || Number.isNaN(lng)) {
+      return res.status(400).json({ message: "Parametres lat et lng obligatoires (nombres decimaux)." });
+    }
+
+    const centers = await RecyclingCenter.find({
+      latitude: { $nin: [null], $exists: true },
+      longitude: { $nin: [null], $exists: true },
     })
-    .then((meeting) =>
-      res.status(201).json({
-        meeting: {
-          id: meeting._id.toString(),
-          centerUserId: meeting.centerUserId.toString(),
-          preferredDate: meeting.preferredDate ? meeting.preferredDate.toISOString() : null,
-          message: meeting.message,
-          status: meeting.status,
-          createdAt: meeting.createdAt?.toISOString?.() || meeting.createdAt,
-        },
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
+      .select(
+        "_id centerName managerName city address district openingHours phone materialsAccepted description latitude longitude rating totalReviews registrationNumber centerType",
+      )
+      .limit(400)
+      .lean();
 
-app.get("/api/meetings/my", authMiddleware, (req, res) => {
-  return MeetingRequest.find({ requesterId: req.user._id })
-    .sort({ createdAt: -1 })
-    .limit(50)
-    .then((meetings) =>
-      res.json({
-        meetings: meetings.map((meeting) => ({
-          id: meeting._id.toString(),
-          centerUserId: meeting.centerUserId.toString(),
-          preferredDate: meeting.preferredDate ? meeting.preferredDate.toISOString() : null,
-          message: meeting.message,
-          status: meeting.status,
-          createdAt: meeting.createdAt?.toISOString?.() || meeting.createdAt,
-        })),
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
+    const materialKey =
+      ALLOWED_MATERIALS.includes(materialRaw) ? materialRaw : "";
 
-app.get("/api/meetings/inbox", authMiddleware, (req, res) => {
-  const isCenter = req.user.accountType === "centre_de_collecte";
-  if (!isCenter && req.user.role !== "admin") {
-    return res.status(403).json({ message: "Acces refuse" });
+    const withDist = centers
+      .map((center) => {
+        const plat = typeof center.latitude === "number" ? center.latitude : null;
+        const plng = typeof center.longitude === "number" ? center.longitude : null;
+        if (plat == null || plng == null) return null;
+        if (!centerAcceptsScanMaterial(center, materialKey)) return null;
+
+        const distanceKm = haversineKm(lat, lng, plat, plng);
+        const idStr = center._id.toString();
+        return {
+          id: idStr,
+          centerName: center.centerName,
+          managerName: center.managerName,
+          city: center.city,
+          address: center.address,
+          district: center.district,
+          openingHours: center.openingHours,
+          phone: center.phone,
+          materialsAccepted: center.materialsAccepted,
+          description: center.description,
+          latitude: plat,
+          longitude: plng,
+          rating: center.rating,
+          totalReviews: center.totalReviews,
+          registrationNumber: center.registrationNumber,
+          centerType: center.centerType,
+          distanceKm: Number(distanceKm.toFixed(2)),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, limit);
+
+    return res.json({ centers: withDist });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
   }
-
-  const filter = isCenter ? { centerUserId: req.user._id } : {};
-
-  return MeetingRequest.find(filter)
-    .sort({ createdAt: -1 })
-    .limit(100)
-    .populate("requesterId", "firstName lastName email role accountType phone adresse collectionCenter createdAt")
-    .then((meetings) =>
-      res.json({
-        meetings: meetings.map((meeting) => ({
-          id: meeting._id.toString(),
-          requester: meeting.requesterId ? sanitizeUser(meeting.requesterId) : null,
-          centerUserId: meeting.centerUserId.toString(),
-          preferredDate: meeting.preferredDate ? meeting.preferredDate.toISOString() : null,
-          message: meeting.message,
-          status: meeting.status,
-          createdAt: meeting.createdAt?.toISOString?.() || meeting.createdAt,
-        })),
-      })
-    )
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
 });
 
-app.get("/api/admin/users", authMiddleware, requireRole("admin"), (req, res) => {
-  return User.find({})
-    .sort({ createdAt: -1 })
-    .limit(200)
-    .then((users) => res.json({ users: users.map(sanitizeUser) }))
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
+app.post("/api/meetings", authMiddleware, requireDatabase, async (req, res) => {
+  try {
+    const centerUserId = req.body?.centerUserId ? String(req.body.centerUserId).trim() : "";
+    const preferredDateRaw = req.body?.preferredDate;
+    const message = String(req.body?.message || "").trim().slice(0, 2000);
 
-app.patch("/api/admin/users/:id", authMiddleware, requireRole("admin"), (req, res) => {
-  const { role } = req.body || {};
-  if (!role || !["client", "moderator", "admin"].includes(String(role))) {
-    return res.status(400).json({ message: "role invalide" });
-  }
-  return User.findByIdAndUpdate(req.params.id, { role: String(role) }, { new: true })
-    .then((user) => {
-      if (!user) return res.status(404).json({ message: "Utilisateur introuvable" });
-      return res.json({ user: sanitizeUser(user) });
-    })
-    .catch((error) => res.status(500).json({ message: error.message || "Erreur serveur" }));
-});
+    if (!centerUserId) {
+      return res.status(400).json({ message: "Centre obligatoire" });
+    }
 
-connectToDatabase()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`API EcoScan disponible sur http://localhost:${PORT}`);
+    const centerDoc = await RecyclingCenter.findById(centerUserId).select("_id").lean();
+    if (!centerDoc) {
+      return res.status(404).json({ message: "Centre inconnu ou sans fiche recycleur" });
+    }
+
+    let preferredDate = null;
+    if (preferredDateRaw) {
+      const d = new Date(preferredDateRaw);
+      preferredDate = Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    const mr = await MeetingRequest.create({
+      requesterId: req.user._id,
+      centerUserId: centerDoc._id,
+      preferredDate,
+      message,
+      status: "pending",
     });
-  })
-  .catch((error) => {
-    console.error("Connexion MongoDB impossible:", error.message);
-    process.exit(1);
+
+    return res.status(201).json({ meetingId: mr._id.toString() });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+app.get("/api/meetings/my", authMiddleware, requireDatabase, async (req, res) => {
+  try {
+    const rows = await MeetingRequest.find({ requesterId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .populate("centerUserId", "centerName city phone address district")
+      .lean();
+
+    const meetings = rows.map((m) => ({
+      id: m._id.toString(),
+      status: m.status,
+      message: m.message,
+      preferredDate: m.preferredDate,
+      createdAt: m.createdAt,
+      center: m.centerUserId
+        ? {
+            id: m.centerUserId._id.toString(),
+            centerName: m.centerUserId.centerName,
+            city: m.centerUserId.city,
+            phone: m.centerUserId.phone,
+            address: m.centerUserId.address,
+            district: m.centerUserId.district,
+          }
+        : null,
+    }));
+
+    return res.json({ meetings });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+app.get("/api/meetings/inbox", authMiddleware, requireDatabase, async (req, res) => {
+  try {
+    let rows;
+
+    if (req.user.role === "admin") {
+      rows = await MeetingRequest.find({})
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .populate("requesterId", "firstName lastName email")
+        .lean();
+    } else {
+      const myCenterIds = [];
+      const rcByEmail = await RecyclingCenter.findOne({
+        email: String(req.user.email || "").trim().toLowerCase(),
+      })
+        .select("_id")
+        .lean();
+      if (rcByEmail) myCenterIds.push(rcByEmail._id.toString());
+
+      const reg = req.user.collectionCenter?.registrationNumber;
+      if (typeof reg === "string" && reg.trim()) {
+        const rcByAlt = await RecyclingCenter.findOne({
+          registrationNumber: reg.trim(),
+        })
+          .select("_id")
+          .lean();
+        if (rcByAlt && !myCenterIds.includes(rcByAlt._id.toString())) {
+          myCenterIds.push(rcByAlt._id.toString());
+        }
+      }
+
+      const oids = myCenterIds
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+      if (!oids.length) {
+        return res.json({ meetings: [] });
+      }
+
+      rows = await MeetingRequest.find({ centerUserId: { $in: oids } })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .populate("requesterId", "firstName lastName email")
+        .lean();
+    }
+
+    const meetings = rows.map((m) => ({
+      id: m._id.toString(),
+      status: m.status,
+      message: m.message,
+      preferredDate: m.preferredDate,
+      createdAt: m.createdAt,
+      requester: m.requesterId
+        ? {
+            id: m.requesterId._id.toString(),
+            firstName: m.requesterId.firstName,
+            lastName: m.requesterId.lastName,
+            email: m.requesterId.email,
+          }
+        : null,
+    }));
+
+    return res.json({ meetings });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+// Get recycling centers from OpenStreetMap Overpass API (Tunisia)
+app.get("/api/osm-recycling-centers", async (req, res) => {
+  try {
+    const { country = "Tunisia", limit = 100 } = req.query;
+
+    const areaSelector =
+      String(country).trim().toLowerCase() === "tunisia"
+        ? 'area["ISO3166-1"="TN"][admin_level=2]'
+        : `area["name"="${country}"]`;
+
+    const overpassQuery = `
+      [out:json];
+      ${areaSelector}->.searchArea;
+      (
+        node["amenity"="recycling"](area.searchArea);
+        way["amenity"="recycling"](area.searchArea);
+        relation["amenity"="recycling"](area.searchArea);
+      );
+      out center;
+    `;
+    const response = await runOverpassQuery(overpassQuery);
+
+    const rawElements = Array.isArray(response?.data?.elements) ? response.data.elements : [];
+
+    const centers = rawElements
+      .map((el) => {
+        const latitude = el.lat ?? el.center?.lat ?? null;
+        const longitude = el.lon ?? el.center?.lon ?? null;
+
+        if (latitude === null || longitude === null) return null;
+
+        return {
+          id: `osm_${el.id}`,
+          centerName: el.tags?.name || `Recycling Center ${el.id}`,
+          latitude,
+          longitude,
+          materialsAccepted: el.tags?.recycling_type
+            ? String(el.tags.recycling_type)
+                .split(";")
+                .map((m) => m.trim())
+                .filter(Boolean)
+            : [],
+          address: el.tags?.["addr:full"] || el.tags?.["addr:street"] || "N/A",
+          city: el.tags?.["addr:city"] || country,
+          phone: el.tags?.phone || "",
+          openingHours: el.tags?.opening_hours || "N/A",
+          centerType: "public",
+          description: el.tags?.description || "",
+          source: "OpenStreetMap Overpass API",
+        };
+      })
+      .filter(Boolean)
+      .slice(0, Number.parseInt(limit, 10) || 100);
+
+    res.json({
+      centers,
+      count: centers.length,
+      source: "openstreetmap",
+      country,
+    });
+  } catch (error) {
+    console.error("Error fetching from Overpass API:", error.message);
+    res.status(500).json({
+      error: "Failed to fetch from Overpass API",
+      message: error.message,
+    });
+  }
+});
+
+// Route: Get recycling centers in Tunisia (simple format)
+// This is an alias that matches the lightweight response shape often used by frontends.
+app.get("/api/recycling-centers", async (req, res) => {
+  try {
+    const { country = "Tunisia" } = req.query;
+
+    const areaSelector =
+      String(country).trim().toLowerCase() === "tunisia"
+        ? 'area["ISO3166-1"="TN"][admin_level=2]'
+        : `area["name"="${country}"]`;
+
+    const overpassQuery = `
+      [out:json];
+      ${areaSelector}->.searchArea;
+      (
+        node["amenity"="recycling"](area.searchArea);
+        way["amenity"="recycling"](area.searchArea);
+        relation["amenity"="recycling"](area.searchArea);
+      );
+      out center;
+    `;
+    const response = await runOverpassQuery(overpassQuery);
+
+    const rawElements = Array.isArray(response?.data?.elements) ? response.data.elements : [];
+
+    const centers = rawElements
+      .map((el) => {
+        const latitude = el.lat ?? el.center?.lat ?? null;
+        const longitude = el.lon ?? el.center?.lon ?? null;
+        if (latitude === null || longitude === null) return null;
+
+        return {
+          id: el.id,
+          name: el.tags?.name || "Recycling Center",
+          latitude,
+          longitude,
+          materials: el.tags?.recycling_type || "unknown",
+          address: el.tags?.["addr:full"] || el.tags?.["addr:street"] || "N/A",
+        };
+      })
+      .filter(Boolean);
+
+    res.json(centers);
+  } catch (error) {
+    console.error("Error fetching data:", error.message);
+    res.status(500).json({ message: "Error fetching data" });
+  }
+});
+
+const scanPhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, uploadsDir),
+    filename: (req, file, cb) => {
+      const ext = path.extname(file.originalname || "");
+      const safeExt = ext && ext.length <= 10 ? ext : "";
+      cb(null, `scan_${Date.now()}_${crypto.randomBytes(6).toString("hex")}${safeExt}`);
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const mimeOk = /^image\/(jpeg|jpg|png|webp|gif|pjpeg|x-png)$/i.test(
+      String(file.mimetype || ""),
+    );
+    const extOk = /\.(jpe?g|png|gif|webp)$/i.test(file.originalname || "");
+    if (mimeOk || extOk) cb(null, true);
+    else cb(new Error("Photo: formats acceptes JPG, PNG, WebP ou GIF."));
+  },
+}).single("photo");
+
+// Scans: Create a new scan (multipart: label, material, photo fichier optionnel)
+app.post("/api/scans", authMiddleware, async (req, res) => {
+  if (req.user.accountType === "centre_de_collecte") {
+    return res.status(403).json({
+      message: "Les centres de collecte ne peuvent pas utiliser la fonctionnalite Scanner.",
+    });
+  }
+
+  scanPhotoUpload(req, res, async (uploadErr) => {
+    try {
+      if (uploadErr) {
+        const msg =
+          typeof uploadErr?.message === "string" ? uploadErr.message : "Fichier image invalide";
+        return res.status(400).json({ message: msg });
+      }
+
+      const label = String(req.body?.label || "").trim();
+      const material = String(req.body?.material || "").trim();
+
+      if (!label || !material) {
+        return res.status(400).json({ message: "Label et matériau requis" });
+      }
+
+      if (!ALLOWED_MATERIALS.includes(material)) {
+        return res.status(400).json({ message: "Matériau invalide" });
+      }
+
+      const materialData = MATERIAL_DATABASE[material] || {
+        recyclable: true,
+        points: 0,
+        instructions: "Informations non disponibles pour ce matériau.",
+      };
+
+      let photoUrl = "";
+      if (req.file?.filename) {
+        photoUrl = `/uploads/${req.file.filename}`;
+      }
+
+      const scan = await Scan.create({
+        userId: req.user._id,
+        label,
+        material,
+        recyclable: materialData.recyclable,
+        instructions: materialData.instructions,
+        points: materialData.points,
+        photoUrl,
+      });
+
+      let userPointsAfter = typeof req.user.points === "number" ? req.user.points : 0;
+      if (materialData.points > 0) {
+        const updatedUser = await User.findByIdAndUpdate(
+          req.user._id,
+          { $inc: { points: materialData.points } },
+          { new: true },
+        ).lean();
+        if (updatedUser && typeof updatedUser.points === "number") userPointsAfter = updatedUser.points;
+      }
+
+      return res.status(201).json({
+        message: "Scan créé avec succès",
+        scan: {
+          id: scan._id.toString(),
+          label: scan.label,
+          material: scan.material,
+          recyclable: scan.recyclable,
+          instructions: scan.instructions,
+          points: scan.points,
+          photoUrl: scan.photoUrl,
+          createdAt: scan.createdAt,
+        },
+        userPoints: userPointsAfter,
+      });
+    } catch (error) {
+      return res.status(500).json({ message: error.message || "Erreur serveur" });
+    }
   });
+});
+
+// Scans: Get scan by ID
+app.get("/api/scans/:id", authMiddleware, async (req, res) => {
+  try {
+    const scan = await Scan.findById(req.params.id).lean();
+
+    if (!scan) {
+      return res.status(404).json({ message: "Scan introuvable" });
+    }
+
+    return res.json({
+      scan: {
+        id: scan._id.toString(),
+        label: scan.label,
+        material: scan.material,
+        recyclable: scan.recyclable,
+        instructions: scan.instructions,
+        points: scan.points,
+        photoUrl: scan.photoUrl,
+        createdAt: scan.createdAt,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+// Scans: Get user's scans
+app.get("/api/scans/my", authMiddleware, async (req, res) => {
+  try {
+    const scans = await Scan.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    return res.json({
+      scans: scans.map((scan) => ({
+        id: scan._id.toString(),
+        label: scan.label,
+        material: scan.material,
+        recyclable: scan.recyclable,
+        instructions: scan.instructions,
+        points: scan.points,
+        photoUrl: scan.photoUrl,
+        createdAt: scan.createdAt,
+      })),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+// Seed test data (for development)
+app.post("/api/seed-test-data", async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        message: "Base de donnees indisponible. Impossible de seed en ce moment.",
+      });
+    }
+
+    const testCenters = [
+      {
+        firstName: "Mamadou",
+        lastName: "Diallo",
+        email: "center1@ecoscan.com",
+        passwordHash: "$2a$12$r9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ee5D/Z.Ua7CKA6T2",
+        role: "center_manager",
+        centerName: "Centre de Collecte Dakar Nord",
+        managerName: "Mamadou Diallo",
+        registrationNumber: "REG001",
+        centerType: "public",
+        materialsAccepted: ["plastic", "glass", "paper"],
+        city: "Dakar",
+        address: "123 Rue de la Paix, Dakar",
+        district: "Plateau",
+        openingHours: "8:00 AM - 6:00 PM",
+        closingDays: ["Sunday"],
+        phone: "+221 33 123 4567",
+        capacityPerDayKg: 5000,
+        currentCapacityKg: 2000,
+        description: "Centre de collecte moderne avec équipements de tri",
+        latitude: 14.7167,
+        longitude: -17.4674,
+        isVerified: true,
+        rating: 4.5,
+        totalReviews: 12,
+      },
+      {
+        firstName: "Fatima",
+        lastName: "Ba",
+        email: "center2@ecoscan.com",
+        passwordHash: "$2a$12$r9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ee5D/Z.Ua7CKA6T2",
+        role: "center_manager",
+        centerName: "Centre Écologique Maristes",
+        managerName: "Fatima Ba",
+        registrationNumber: "REG002",
+        centerType: "non_profit",
+        materialsAccepted: ["glass", "metal", "electronic"],
+        city: "Dakar",
+        address: "45 Avenue Cheikh Anta Diop, Dakar",
+        district: "Fann",
+        openingHours: "9:00 AM - 5:00 PM",
+        closingDays: ["Sunday"],
+        phone: "+221 33 987 6543",
+        capacityPerDayKg: 3000,
+        currentCapacityKg: 1000,
+        description: "ONG spécialisée en recyclage et sensibilisation",
+        latitude: 14.72,
+        longitude: -17.465,
+        isVerified: true,
+        rating: 4.8,
+        totalReviews: 25,
+      },
+      {
+        firstName: "Ibrahima",
+        lastName: "Sarr",
+        email: "center3@ecoscan.com",
+        passwordHash: "$2a$12$r9h/cIPz0gi.URNNX3kh2OPST9/PgBkqquzi.Ee5D/Z.Ua7CKA6T2",
+        role: "center_manager",
+        centerName: "Recycling Point Ouakam",
+        managerName: "Ibrahima Sarr",
+        registrationNumber: "REG003",
+        centerType: "private",
+        materialsAccepted: ["plastic", "paper", "organic"],
+        city: "Dakar",
+        address: "789 Bd de la République, Ouakam",
+        district: "Ouakam",
+        openingHours: "7:00 AM - 8:00 PM",
+        closingDays: [],
+        phone: "+221 33 555 8910",
+        capacityPerDayKg: 8000,
+        currentCapacityKg: 4500,
+        description: "Centre commercial avec section recyclage complète",
+        latitude: 14.66,
+        longitude: -17.51,
+        isVerified: true,
+        rating: 4.2,
+        totalReviews: 18,
+      },
+    ];
+
+    await RecyclingCenter.deleteMany({});
+    await RecyclingCenter.insertMany(testCenters);
+
+    res.json({
+      message: "Test data seeded successfully",
+      count: testCenters.length,
+    });
+  } catch (error) {
+    console.error("Error seeding data:", error.message);
+    res.status(500).json({ error: "Failed to seed data", message: error.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`API EcoScan disponible sur http://localhost:${PORT}`);
+});
+
+connectToDatabase().catch((error) => {
+  console.error("Connexion MongoDB impossible:", error.message);
+  // Keep server running to allow non-DB routes (ex: Overpass/OpenStreetMap).
+});

@@ -2,20 +2,18 @@ import React, { useState } from "react";
 import { NavLink } from "react-router-dom";
 import "../App.css";
 import { useAuth } from "../context/AuthContext";
+import { canUseScan } from "../utils/permissions";
 
 const Navbar = () => {
   const [open, setOpen] = useState(false);
-  const { isAuthenticated, user, logout, logoutAll } = useAuth();
+  const { isAuthenticated, user, logout } = useAuth();
 
   const handleLogout = async () => {
     setOpen(false);
     await logout();
   };
 
-  const handleLogoutAll = async () => {
-    setOpen(false);
-    await logoutAll();
-  };
+
 
   return (
     <nav className="navbar">
@@ -51,7 +49,7 @@ const Navbar = () => {
               Mon espace
             </NavLink>
           )}
-          {isAuthenticated && (
+          {isAuthenticated && canUseScan(user) && (
             <NavLink
               to="/scan"
               className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}
@@ -121,18 +119,9 @@ const Navbar = () => {
           )}
           <div className="nav-right">
             {isAuthenticated ? (
-              <>
-                <button type="button" className="nav-cta nav-logout" onClick={handleLogout}>
-                  Deconnexion
-                </button>
-                <button
-                  type="button"
-                  className="nav-cta nav-logout-all"
-                  onClick={handleLogoutAll}
-                >
-                  Deconnecter tout
-                </button>
-              </>
+              <button type="button" className="nav-cta nav-logout" onClick={handleLogout}>
+                Deconnexion
+              </button>
             ) : (
               <>
                 <NavLink to="/connexion" className="nav-cta" onClick={() => setOpen(false)}>

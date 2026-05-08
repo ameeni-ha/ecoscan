@@ -2,6 +2,42 @@
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
+## Run full project (API + MongoDB + React)
+
+### 1) MongoDB
+
+Install and run **[MongoDB Community Server](https://www.mongodb.com/try/download/community)** locally (ensure the Windows service listens on port **27017**), **or** use **[MongoDB Atlas](https://www.mongodb.com/cloud/atlas)** and copy your connection string.
+
+Copy `backend/api/.env.example` to `backend/api/.env` and set **`MONGO_URI`** (required in production).
+
+In development, if `MONGO_URI` is omitted, the API connects to **`mongodb://127.0.0.1:27017/ecoscan`**.
+
+### 2) API (Express)
+
+Keep this running **in its own terminal** (the React UI does not start the API automatically):
+
+```bash
+npm run api
+```
+
+The API listens on **`http://127.0.0.1:4000`**. Health check: **`http://127.0.0.1:4000/api/health`**.
+
+### 3) React app
+
+In another terminal:
+
+```bash
+npm start
+```
+
+Open `http://localhost:3000` (or the port CRA prints if 3000 is busy).
+
+During development the app proxies API calls to port **4000** via **`package.json` → `proxy`**, so **CORS stays simple** while `npm run api` uses the **default URL** (`REACT_APP_API_URL` is optional locally). For a hosted front-end, build with **`REACT_APP_API_URL`** pointing at your public API (e.g. `https://api.example.com/api`).
+
+### Notes
+
+- If the primary **`MONGO_URI`** fails during development (e.g. Atlas offline), set **`LOCAL_MONGO_URI`** to a reachable instance in `backend/api/.env`, or the API may fall back to an in-memory MongoDB for development only.
+
 ## Available Scripts
 
 In the project directory, you can run:

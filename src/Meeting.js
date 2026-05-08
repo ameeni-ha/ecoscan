@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { apiRequest } from "./api/client";
 import { useAuth } from "./context/AuthContext";
 
 export default function Meeting() {
   const { user, token } = useAuth();
+  const [searchParams] = useSearchParams();
   const isCenter = user?.accountType === "centre_de_collecte";
 
   const [centers, setCenters] = useState([]);
@@ -55,6 +57,13 @@ export default function Meeting() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const c = searchParams.get("center");
+    const msg = searchParams.get("message");
+    if (c) setCenterUserId(c);
+    if (msg !== null && msg !== "") setMessage(msg);
+  }, [searchParams]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -159,7 +168,15 @@ export default function Meeting() {
                 {myMeetings.map((m) => (
                   <div key={m.id} className="app-card" style={{ background: "#ffffff" }}>
                     <div className="app-row" style={{ justifyContent: "space-between" }}>
-                      <div style={{ fontWeight: 900 }}>Centre: {m.centerUserId}</div>
+                      <div style={{ fontWeight: 900 }}>
+                        Centre : {m.center?.centerName || "Fiche EcoScan"}
+                        {m.center?.city ? (
+                          <span className="app-muted" style={{ fontWeight: 500 }}>
+                            {" "}
+                            — {m.center.city}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="badge">{m.status}</div>
                     </div>
                     <div className="app-muted" style={{ marginTop: 6 }}>

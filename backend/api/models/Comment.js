@@ -20,6 +20,12 @@ const commentSchema = new mongoose.Schema(
       trim: true,
       maxlength: 2000,
     },
+    parentCommentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Comment",
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       enum: ["published", "hidden"],

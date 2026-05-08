@@ -6,9 +6,9 @@ import React, {
   useEffect,
 } from "react";
 
+import { apiUrl } from "../utils/apiUrls";
+
 const AuthContext = createContext(null);
-const API_BASE_URL =
-  process.env.REACT_APP_API_URL || "http://localhost:4000/api";
 const TOKEN_STORAGE_KEY = "ecoscan.auth.token";
 const USER_STORAGE_KEY = "ecoscan.auth.user";
 
@@ -40,7 +40,7 @@ const request = async (path, options = {}) => {
   let response;
 
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(apiUrl(path), {
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
@@ -50,7 +50,7 @@ const request = async (path, options = {}) => {
     });
   } catch (error) {
     throw new Error(
-      "Impossible de contacter le serveur. Verifiez que l'API est demarree."
+      "Impossible de contacter le serveur. Ouvrez un second terminal puis lancez: npm run api (port 4000)."
     );
   }
 
