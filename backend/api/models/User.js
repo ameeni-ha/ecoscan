@@ -64,60 +64,10 @@ const userSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
-    adresse: {
+    address: {
       type: String,
       default: "",
       trim: true,
-    },
-    collectionCenter: {
-      centerName: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      managerName: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      registrationNumber: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      centerType: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      materialsAccepted: {
-        type: [String],
-        default: [],
-      },
-      city: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      openingHours: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      district: {
-        type: String,
-        default: "",
-        trim: true,
-      },
-      capacityPerDayKg: {
-        type: Number,
-        default: null,
-      },
-      description: {
-        type: String,
-        default: "",
-        trim: true,
-      },
     },
     points: {
       type: Number,

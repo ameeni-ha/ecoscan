@@ -103,6 +103,47 @@ const Accueil = () => {
         </div>
       </section>
 
+      <section className="home-articles">
+        <h2>📊 Statistiques sur le recyclage en Tunisie</h2>
+        <p className="home-articles-subtitle">
+          Comprendre l'importance du recyclage pour notre environnement.
+        </p>
+
+        <div className="home-articles-grid">
+          <article className="home-article-card">
+            <div className="home-article-icon">🌍</div>
+            <h3>Impact environnemental</h3>
+            <p>
+              La Tunisie produit environ <strong>2.5 millions de tonnes</strong> de déchets par an, dont seulement <strong>10%</strong> sont recyclés. Le recyclage d'une tonne de plastique économise <strong>1.5 tonnes de CO2</strong>.
+            </p>
+          </article>
+
+          <article className="home-article-card">
+            <div className="home-article-icon">♻️</div>
+            <h3>Potentiel de recyclage</h3>
+            <p>
+              <strong>80% des déchets</strong> en Tunisie pourraient être recyclés mais ne le sont pas actuellement. Le secteur du recyclage pourrait créer <strong>50,000 emplois</strong> directs et indirects.
+            </p>
+          </article>
+
+          <article className="home-article-card">
+            <div className="home-article-icon">📈</div>
+            <h3>Économie circulaire</h3>
+            <p>
+              Chaque tonne de papier recyclée économise <strong>17 arbres</strong> et <strong>50% d'eau</strong> par rapport à la production de papier neuf. Le recyclage du verre permet d'économiser <strong>30% d'énergie</strong>.
+            </p>
+          </article>
+
+          <article className="home-article-card">
+            <div className="home-article-icon">🏭</div>
+            <h3>Industrie locale</h3>
+            <p>
+              La Tunisie compte <strong>13 centres de recyclage</strong> officiels et <strong>200+ points de collecte</strong> à travers le pays. L'industrie du recyclage représente un marché potentiel de <strong>500 millions de dinars</strong>.
+            </p>
+          </article>
+        </div>
+      </section>
+
       <section className="home-cta">
         <div className="home-cta-card">
           <div className="home-cta-icon">🌲</div>

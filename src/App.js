@@ -19,6 +19,7 @@ import Leaderboard from "./Leaderboard";
 import Profile from "./Profile";
 import Meeting from "./Meeting";
 import AdminUsers from "./AdminUsers";
+import AdminDashboard from "./AdminDashboard";
 import ModerateForum from "./ModerateForum";
 import Navbar from "./components/Navbar";
 import { useAuth } from "./context/AuthContext";
@@ -116,6 +117,14 @@ function App() {
           element={
             <RoleRoute allow={["admin"]}>
               <AdminUsers />
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="/admin/dashboard"
+          element={
+            <RoleRoute allow={["admin"]}>
+              <AdminDashboard />
             </RoleRoute>
           }
         />

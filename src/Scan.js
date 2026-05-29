@@ -39,8 +39,20 @@ export default function Scan() {
   const [cameraLive, setCameraLive] = useState(false);
   const [cameraError, setCameraError] = useState("");
 
+  // Nearby recycling centers
+  const [nearbyCenters, setNearbyCenters] = useState([]);
+  const [nearbyLoading, setNearbyLoading] = useState(false);
+  const [geoMessage, setGeoMessage] = useState("");
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const canvasRef = useRef(null);
+  const detectionIntervalRef = useRef(null);
+  const labelRef = useRef(label);
+
+  useEffect(() => {
+    labelRef.current = label;
+  }, [label]);
 
   const materialLabel = useMemo(
     () => MATERIAL_OPTIONS.find((m) => m.value === material)?.label || material,
@@ -56,6 +68,29 @@ export default function Scan() {
       // ignore
     } finally {
       setHistoryLoading(false);
+    }
+  };
+
+  const handleDeleteScan = async (scanId, scanPoints) => {
+    if (!window.confirm("Êtes-vous sûr de vouloir supprimer ce scan ? Les points associés seront également retirés.")) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/scans/${scanId}`, {
+        method: "DELETE",
+        token,
+      });
+
+      // Mettre à jour les points de l'utilisateur
+      if (user && scanPoints > 0) {
+        updateUser({ ...user, points: (user.points || 0) - scanPoints });
+      }
+
+      // Recharger l'historique
+      await loadHistory();
+    } catch (e) {
+      setError(e?.message || "Impossible de supprimer ce scan");
     }
   };
 
@@ -91,6 +126,196 @@ export default function Scan() {
   useEffect(() => {
     return () => stopCameraStream();
   }, [stopCameraStream]);
+
+  const runLiveDetection = useCallback(async () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || video.paused || video.ended) return;
+
+    try {
+      const predictions = await detectObjects(video);
+      
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+        }
+
+        predictions.forEach((prediction) => {
+          const [x, y, width, height] = prediction.bbox;
+          
+          ctx.strokeStyle = "#4caf50";
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x, y, width, height);
+
+          ctx.fillStyle = "#4caf50";
+          ctx.font = "14px Arial";
+          const labelText = `${prediction.class} (${Math.round(prediction.score * 100)}%)`;
+          const textWidth = ctx.measureText(labelText).width;
+          ctx.fillRect(x, y - 25, textWidth + 10, 20);
+
+          ctx.fillStyle = "#ffffff";
+          ctx.fillText(labelText, x + 5, y - 10);
+        });
+      }
+
+      if (predictions && predictions.length > 0) {
+        const suggestion = suggestMaterial(predictions);
+        if (suggestion) {
+          setDetectionResult(suggestion);
+          if (suggestion.material) {
+            setMaterial(suggestion.material);
+            setLabel((prev) => prev || suggestion.detectedObject || "Objet détecté");
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Erreur lors de la détection en direct:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (cameraLive) {
+      detectionIntervalRef.current = setInterval(() => {
+        runLiveDetection();
+      }, 500);
+    } else {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
+      }
+      const canvas = canvasRef.current;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        ctx?.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    return () => {
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+      }
+    };
+  }, [cameraLive, runLiveDetection]);
+
+  useEffect(() => {
+    if (!photoPreview) return;
+
+    const autoDetect = async () => {
+      setDetecting(true);
+      setError("");
+      setDetectionResult(null);
+
+      try {
+        const img = new Image();
+        img.src = photoPreview;
+
+        await new Promise((resolve) => {
+          img.onload = resolve;
+        });
+
+        img.width = img.naturalWidth || img.width;
+        img.height = img.naturalHeight || img.height;
+
+        const predictions = await detectObjects(img);
+
+        if (predictions && predictions.length > 0) {
+          const suggestion = suggestMaterial(predictions);
+          setDetectionResult(suggestion);
+
+          if (suggestion.material) {
+            setMaterial(suggestion.material);
+            setLabel((prev) => prev || suggestion.detectedObject || "Objet détecté");
+          } else {
+            setError(
+              `Objet détecté: ${suggestion.detectedObject} (${suggestion.confidence}% confiance) - Sélectionnez manuellement le matériau`
+            );
+          }
+        } else {
+          setError(
+            "Aucun objet détecté. Veuillez essayer une autre photo ou entrez manuellement."
+          );
+        }
+      } catch (err) {
+        setError(
+          err?.message || "Erreur lors de la détection. Veuillez réessayer."
+        );
+      } finally {
+        setDetecting(false);
+      }
+    };
+
+    autoDetect();
+  }, [photoPreview]);
+
+  // Load nearby recycling centers when a recyclable material is detected
+  useEffect(() => {
+    if (!detectionResult || !detectionResult.material) {
+      setNearbyCenters([]);
+      setGeoMessage("");
+      return;
+    }
+
+    setNearbyLoading(true);
+    setGeoMessage("");
+    setNearbyCenters([]);
+
+    if (!navigator.geolocation) {
+      setNearbyLoading(false);
+      setGeoMessage(
+        "Géolocalisation indisponible. Consultez la page Centres pour trouver un point de dépôt."
+      );
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setNearbyLoading(false);
+      setGeoMessage(
+        "Délai de géolocalisation dépassé. Autorisez la position puis réessayez."
+      );
+    }, 14000);
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        window.clearTimeout(timeoutId);
+        try {
+          const { latitude, longitude } = pos.coords;
+          const qs = new URLSearchParams({
+            lat: String(latitude),
+            lng: String(longitude),
+            limit: "6",
+          });
+          if (detectionResult.material) qs.set("material", detectionResult.material);
+          const data = await apiRequest(`/centers/nearby?${qs.toString()}`);
+          const list = Array.isArray(data?.centers) ? data.centers : [];
+          setNearbyCenters(list);
+          setGeoMessage(
+            list.length
+              ? `${list.length} centre(s) proche(s) compatible(s) avec le matériau détecté.`
+              : "Aucun centre enregistré dans la région pour ce matériau."
+          );
+        } catch (e2) {
+          setGeoMessage(e2?.message || "Impossible de charger les centres proches.");
+          setNearbyCenters([]);
+        } finally {
+          setNearbyLoading(false);
+        }
+      },
+      () => {
+        window.clearTimeout(timeoutId);
+        setNearbyLoading(false);
+        setGeoMessage(
+          "Position refusée. Activez la localisation pour voir les centres les plus proches."
+        );
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60_000 }
+    );
+
+    return () => window.clearTimeout(timeoutId);
+  }, [detectionResult]);
 
   const applyPhotoFile = useCallback((file) => {
     if (!file) return;
@@ -137,12 +362,19 @@ export default function Scan() {
         audio: false,
       });
       streamRef.current = stream;
-      const vid = videoRef.current;
-      if (vid) {
-        vid.srcObject = stream;
-        await vid.play();
-      }
       setCameraLive(true);
+      
+      setTimeout(async () => {
+        const vid = videoRef.current;
+        if (vid) {
+          vid.srcObject = stream;
+          try {
+            await vid.play();
+          } catch (playErr) {
+            console.error("Error playing video:", playErr);
+          }
+        }
+      }, 100);
     } catch (err) {
       setCameraError(
         err?.message || "Accès caméra refusé. Autorisez la caméra ou choisissez une photo depuis la galerie.",
@@ -228,7 +460,7 @@ export default function Scan() {
   };
 
   const onSubmit = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setError("");
     setLoading(true);
 
@@ -238,6 +470,10 @@ export default function Scan() {
       formData.append("material", material);
       if (photo) {
         formData.append("photo", photo);
+      }
+      // Ajouter la propriété recyclable
+      if (detectionResult && detectionResult.recyclable !== undefined) {
+        formData.append("recyclable", String(detectionResult.recyclable));
       }
 
       const data = await apiRequest("/scans", {
@@ -313,11 +549,52 @@ export default function Scan() {
               <div className="app-muted" style={{ marginTop: 8 }}>
                 Matériau: <b>{materialLabel}</b>
                 {detectionResult && (
-                  <div style={{ marginTop: 6, color: "#4caf50" }}>
-                    ✓ Détecté: {detectionResult.detectedObject} ({detectionResult.confidence}%)
+                  <div style={{ marginTop: 6 }}>
+                    <div style={{ color: "#4caf50" }}>
+                      ✓ Détecté: {detectionResult.detectedObject} ({detectionResult.confidence}%)
+                    </div>
+                    {detectionResult.recyclable !== undefined && (
+                      <div style={{ marginTop: 4, fontWeight: 700, color: detectionResult.recyclable ? "#4caf50" : "#f44336" }}>
+                        {detectionResult.recyclable ? "♻️ Recyclable" : "⚠️ Non recyclable"}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+
+              {nearbyCenters.length > 0 && (
+                <div style={{ marginTop: 12, padding: 12, backgroundColor: "#e8f5e9", borderRadius: 8 }}>
+                  <h4 style={{ margin: "0 0 8px 0", fontSize: 14, color: "#1b8f4f" }}>
+                    ♻️ Centres de recyclage proches
+                  </h4>
+                  <p className="app-muted" style={{ margin: 0, fontSize: 12 }}>
+                    {geoMessage}
+                  </p>
+                  <div style={{ marginTop: 8, display: "grid", gap: 8 }}>
+                    {nearbyCenters.slice(0, 3).map((c) => (
+                      <div key={c.id} style={{ background: "#fff", padding: 8, borderRadius: 4, fontSize: 12 }}>
+                        <div style={{ fontWeight: 700 }}>{c.centerName}</div>
+                        <div className="app-muted">
+                          {typeof c.distanceKm === "number" ? `≈ ${c.distanceKm} km • ` : ""}
+                          {[c.city, c.district].filter(Boolean).join(" · ")}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {nearbyLoading && (
+                <div style={{ marginTop: 12, padding: 8, backgroundColor: "#fff8e6", borderRadius: 8, fontSize: 12 }}>
+                  ⏳ Recherche des centres proches...
+                </div>
+              )}
+
+              {geoMessage && nearbyCenters.length === 0 && !nearbyLoading && (
+                <div style={{ marginTop: 12, padding: 8, backgroundColor: "#fff8e6", borderRadius: 8, fontSize: 12 }}>
+                  📍 {geoMessage}
+                </div>
+              )}
             </div>
 
             {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
@@ -380,20 +657,32 @@ export default function Scan() {
                   )}
                 </div>
                 {cameraError ? <p className="form-error" style={{ marginTop: 10, marginBottom: 0 }}>{cameraError}</p> : null}
-                <video
-                  ref={videoRef}
-                  muted
-                  playsInline
-                  autoPlay
-                  style={{
-                    display: cameraLive ? "block" : "none",
-                    width: "100%",
-                    maxHeight: 220,
-                    marginTop: 12,
-                    borderRadius: 8,
-                    background: "#111",
-                  }}
-                />
+                {cameraLive && (
+                  <div style={{ position: "relative", width: "100%", maxHeight: 450, marginTop: 12, borderRadius: 8, overflow: "hidden", background: "#111" }}>
+                    <video
+                      ref={videoRef}
+                      muted
+                      playsInline
+                      autoPlay
+                      style={{
+                        width: "100%",
+                        height: "auto",
+                        display: "block",
+                      }}
+                    />
+                    <canvas
+                      ref={canvasRef}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        height: "100%",
+                        pointerEvents: "none",
+                      }}
+                    />
+                  </div>
+                )}
 
                 {photoPreview && (
                   <div style={{ marginTop: 12 }}>
@@ -481,16 +770,27 @@ export default function Scan() {
             ) : (
               <div style={{ display: "grid", gap: 10 }}>
                 {history.map((scan) => (
-                  <button
-                    key={scan.id}
-                    type="button"
-                    className="app-btn"
-                    style={{ textAlign: "left" }}
-                    onClick={() => navigate(`/scan/${scan.id}`)}
-                  >
-                    <b>{scan.label}</b> — {scan.material} — {scan.recyclable ? "♻️ Recyclable" : "⚠️ À vérifier"} —{" "}
-                    +{scan.points} pts
-                  </button>
+                  <div key={scan.id} style={{ display: "grid", gap: 8 }}>
+                    <button
+                      type="button"
+                      className="app-btn"
+                      style={{ textAlign: "left" }}
+                      onClick={() => navigate(`/scan/${scan.id}`)}
+                    >
+                      <b>{scan.label}</b> — {scan.material} — {scan.recyclable ? "♻️ Recyclable" : "⚠️ À vérifier"} —{" "}
+                      +{scan.points} pts
+                    </button>
+                    <div className="app-row" style={{ gap: 8 }}>
+                      <button
+                        type="button"
+                        className="app-btn"
+                        style={{ fontSize: 12, padding: "4px 8px" }}
+                        onClick={() => handleDeleteScan(scan.id, scan.points)}
+                      >
+                        🗑️ Supprimer
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}

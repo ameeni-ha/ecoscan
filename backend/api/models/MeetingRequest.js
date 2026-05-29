@@ -27,9 +27,42 @@ const meetingRequestSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["pending", "accepted", "rejected"],
+      enum: ["pending", "accepted", "rejected", "cancelled"],
       default: "pending",
       index: true,
+    },
+    material: {
+      type: String,
+      default: "",
+      trim: true,
+    },
+    scanId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Scan",
+      default: null,
+    },
+    acceptedAt: {
+      type: Date,
+      default: null,
+    },
+    rejectedAt: {
+      type: Date,
+      default: null,
+    },
+    rejectionReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
+    meetingConfirmedDate: {
+      type: Date,
+      default: null,
+    },
+    notes: {
+      type: String,
+      default: "",
+      trim: true,
     },
   },
   { timestamps: true }

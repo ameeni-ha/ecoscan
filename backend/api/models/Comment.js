@@ -32,6 +32,11 @@ const commentSchema = new mongoose.Schema(
       default: "published",
       index: true,
     },
+    rating: {
+      type: String,
+      default: "",
+      trim: true,
+    },
   },
   { timestamps: true }
 );

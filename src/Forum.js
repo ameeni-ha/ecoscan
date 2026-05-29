@@ -5,10 +5,11 @@ import { useAuth } from "./context/AuthContext";
 import { formatDateFr } from "./utils/formatDateFr";
 import { mediaUrl } from "./utils/apiUrls";
 import { accountTypeLabel } from "./utils/permissions";
+import "./Forum.css";
 
 export default function Forum() {
   const navigate = useNavigate();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -87,7 +88,7 @@ export default function Forum() {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   required
-                  placeholder="ex : Où déposer ampoules & piles à Dakar ?"
+                  placeholder="ex : Où déposer ampoules & piles à Tunis ?"
                 />
               </div>
               <div>
@@ -156,16 +157,14 @@ export default function Forum() {
             <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
               {posts.map((post) => {
                 const atLabel = accountTypeLabel(post.author?.accountType);
+                const isOwner = user && post.author?.id === user._id;
                 return (
-                  <button
+                  <div
                     key={post.id}
-                    type="button"
                     className="app-card forum-post-row"
                     onClick={() => navigate(`/forum/${post.id}`)}
                     style={{
                       textAlign: "left",
-                      appearance: "none",
-                      WebkitAppearance: "none",
                       border: "1px solid rgba(19,128,71,0.14)",
                       background: "#fbfffd",
                       padding: "14px 16px",
@@ -201,49 +200,86 @@ export default function Forum() {
                         ♻️
                       </div>
                     )}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 800, fontSize: 17, lineHeight: 1.3 }}>{post.title}</div>
-                      <div className="forum-post-meta-line" style={{ marginTop: 6, fontSize: 13 }}>
-                        <span className="app-muted">{formatDateFr(post.createdAt)}</span>
-                        {post.author ? (
-                          <>
-                            <span className="app-muted"> · </span>
-                            <span>
-                              {post.author.firstName} {post.author.lastName}
-                              {atLabel ? (
-                                <span className="forum-type-pill">{atLabel}</span>
-                              ) : null}
-                            </span>
-                          </>
-                        ) : null}
-                        {post.status === "hidden" ? (
-                          <span className="app-muted"> · Masqué (modération)</span>
+                    <div style={{ minWidth: 0, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 800, fontSize: 17, lineHeight: 1.3 }}>{post.title}</div>
+                        <div className="forum-post-meta-line" style={{ marginTop: 6, fontSize: 13 }}>
+                          <span className="app-muted">{formatDateFr(post.createdAt)}</span>
+                          {post.author ? (
+                            <>
+                              <span className="app-muted"> · </span>
+                              <span>
+                                {post.author.firstName} {post.author.lastName}
+                                {atLabel ? (
+                                  <span className="forum-type-pill">{atLabel}</span>
+                                ) : null}
+                              </span>
+                            </>
+                          ) : null}
+                          {post.status === "hidden" ? (
+                            <span className="app-muted"> · Masqué (modération)</span>
+                          ) : null}
+                        </div>
+                        {post.excerpt ? (
+                          <p className="app-muted forum-excerpt" style={{ margin: "10px 0 0", lineHeight: 1.5 }}>
+                            {post.excerpt || ""}
+                            {typeof post.content === "string" &&
+                            post.content.replace(/\s+/g, " ").trim().length > (post.excerpt || "").length
+                              ? "…"
+                              : ""}
+                          </p>
+                        ) : (
+                          <p className="app-muted" style={{ margin: "10px 0 0", lineHeight: 1.5 }}>
+                            Ouvrir pour lire la discussion complète.
+                          </p>
+                        )}
+                        {post.tags?.length ? (
+                          <div className="forum-tag-row" style={{ marginTop: 10 }}>
+                            {post.tags.map((tag) => (
+                              <span key={tag} className="forum-tag">
+                                #{tag}
+                              </span>
+                            ))}
+                          </div>
                         ) : null}
                       </div>
-                      {post.excerpt ? (
-                        <p className="app-muted forum-excerpt" style={{ margin: "10px 0 0", lineHeight: 1.5 }}>
-                          {post.excerpt || ""}
-                          {typeof post.content === "string" &&
-                          post.content.replace(/\s+/g, " ").trim().length > (post.excerpt || "").length
-                            ? "…"
-                            : ""}
-                        </p>
-                      ) : (
-                        <p className="app-muted" style={{ margin: "10px 0 0", lineHeight: 1.5 }}>
-                          Ouvrir pour lire la discussion complète.
-                        </p>
-                      )}
-                      {post.tags?.length ? (
-                        <div className="forum-tag-row" style={{ marginTop: 10 }}>
-                          {post.tags.map((tag) => (
-                            <span key={tag} className="forum-tag">
-                              #{tag}
-                            </span>
-                          ))}
+                      {isOwner && (
+                        <div
+                          style={{ display: "flex", gap: 6, flexShrink: 0, marginTop: 2 }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            className="forum-action-btn"
+                            title="Éditer"
+                            onClick={() => navigate(`/forum/${post.id}`)}
+                            style={{ color: "#666" }}
+                          >
+                            ✏️
+                          </button>
+                          <button
+                            className="forum-action-btn"
+                            title="Supprimer"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (!window.confirm("Êtes-vous sûr de vouloir supprimer ce post ?")) return;
+                              try {
+                                await apiRequest(`/forum/posts/${post.id}`, {
+                                  method: "DELETE",
+                                  token,
+                                });
+                                await loadPosts();
+                              } catch (err) {
+                                setError(err?.message || "Impossible de supprimer le post");
+                              }
+                            }}
+                            style={{ color: "#d32f2f" }}
+                          >
+                            🗑️
+                          </button>
                         </div>
-                      ) : null}
+                      )}
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>

@@ -1,0 +1,1120 @@
+' =============================================================================
+' EcoScan Recycle — Diagrammes PlantUML (Rapport de stage RUN-IT)
+' Modèle métier : City 1 → * RecyclingCenter (cityId)
+' Note : le code actuel utilise encore city:String ; voir City.js si migration
+'
+' Usage :
+'   - VS Code : extension "PlantUML" → Alt+D pour prévisualiser
+'   - En ligne : https://www.plantuml.com/plantuml/uml/
+'   - CLI     : java -jar plantuml.jar diagrams/ecoscan-uml.puml
+'
+' Chaque bloc @startuml / @enduml = une figure exportable (PNG/SVG)
+' =============================================================================
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 2 — Diagramme de classes GLOBAL (corrigé)
+' -----------------------------------------------------------------------------
+@startuml classe-global
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+skinparam linetype ortho
+title Diagramme de classes global — EcoScan Recycle
+
+class User {
+  +_id : ObjectId
+  +firstName : String
+  +lastName : String
+  +email : String
+  +passwordHash : String
+  +role : String
+  +accountType : String
+  +phone : String
+  +address : String
+  +points : Number
+  +createdAt : Date
+  +updatedAt : Date
+  --
+  +comparePassword(password) : Boolean
+  +{static} hashPassword(password) : String
+}
+
+class RefreshToken <<embedded>> {
+  +tokenIdHash : String
+  +expiresAt : Date
+  +revokedAt : Date
+  +replacedByTokenIdHash : String
+}
+
+class Admin {
+  +_id : ObjectId
+  +firstName : String
+  +lastName : String
+  +email : String
+  +passwordHash : String
+  +role : String
+  +permissions : String[]
+  +adminLevel : String
+  +approvalDate : Date
+  +approvedBy : ObjectId
+  --
+  +comparePassword(password) : Boolean
+  +hasPermission(permission) : Boolean
+  +approveUser(userId, status) : Object
+  +removeContent(contentId, type) : Object
+  +generateReport(type, range) : Object
+}
+
+class City {
+  +_id : ObjectId
+  +cityName : String
+  +governorate : String
+  +country : String
+  +postalCode : String
+  +latitude : Number
+  +longitude : Number
+  +population : Number
+  +isActive : Boolean
+  +createdAt : Date
+  +updatedAt : Date
+  --
+  +getCenters() : RecyclingCenter[]
+  +getCentersCount() : Number
+}
+
+class RecyclingCenter {
+  +_id : ObjectId
+  +cityId : ObjectId
+  +centerName : String
+  +managerName : String
+  +registrationNumber : String
+  +centerType : String
+  +materialsAccepted : String[]
+  +address : String
+  +openingHours : String
+  +latitude : Number
+  +longitude : Number
+  +capacityPerDayKg : Number
+  +currentCapacityKg : Number
+  +isVerified : Boolean
+  +rating : Number
+  --
+  +getAvailableCapacity() : Number
+  +canAcceptMaterial(material) : Boolean
+  +updateOperatingHours(hours) : Boolean
+}
+
+class Scan {
+  +_id : ObjectId
+  +userId : ObjectId
+  +label : String
+  +material : String
+  +recyclable : Boolean
+  +instructions : String
+  +points : Number
+  +photoUrl : String
+  +createdAt : Date
+  +updatedAt : Date
+}
+
+class PointsHistory {
+  +_id : ObjectId
+  +userId : ObjectId
+  +scanId : ObjectId
+  +material : String
+  +pointsEarned : Number
+  +reason : String
+  +description : String
+  +status : String
+  +metadata : Object
+  +createdAt : Date
+}
+
+class Post {
+  +_id : ObjectId
+  +authorId : ObjectId
+  +title : String
+  +content : String
+  +tags : String[]
+  +status : String
+  +images : Image[]
+  +createdAt : Date
+  +updatedAt : Date
+}
+
+class Comment {
+  +_id : ObjectId
+  +postId : ObjectId
+  +authorId : ObjectId
+  +content : String
+  +parentCommentId : ObjectId
+  +status : String
+  +createdAt : Date
+}
+
+class MeetingRequest {
+  +_id : ObjectId
+  +requesterId : ObjectId
+  +centerUserId : ObjectId
+  +preferredDate : Date
+  +message : String
+  +status : String
+  +material : String
+  +scanId : ObjectId
+  +acceptedAt : Date
+  +rejectedAt : Date
+  +meetingConfirmedDate : Date
+}
+
+class Notification {
+  +_id : ObjectId
+  +userId : ObjectId
+  +type : String
+  +title : String
+  +message : String
+  +relatedId : ObjectId
+  +relatedModel : String
+  +data : Object
+  +isRead : Boolean
+  +readAt : Date
+  +expiresAt : Date
+}
+
+User "1" *-- "0..*" RefreshToken : refreshTokens
+User "1" --> "0..*" Scan : effectue
+User "1" --> "0..*" Post : publie
+User "1" --> "0..*" Comment : rédige
+User "1" --> "0..*" MeetingRequest : demande
+User "1" --> "0..*" Notification : reçoit
+User "1" --> "0..*" PointsHistory : accumule
+
+Scan "0..1" --> "0..1" PointsHistory : génère
+Scan "0..1" ..> "0..*" MeetingRequest : référence
+
+Post "1" --> "0..*" Comment : contient
+Comment "0..1" --> "0..*" Comment : réponses
+
+City "1" --> "0..*" RecyclingCenter : contient
+RecyclingCenter "1" --> "0..*" MeetingRequest : reçoit
+
+Admin "0..1" --> "0..*" Admin : approuve
+
+note bottom of Admin
+  Pas d'héritage User → Admin.
+  Collections MongoDB séparées.
+end note
+
+note bottom of City
+  Une ville regroupe plusieurs
+  centres de recyclage.
+end note
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 2 — Diagramme de contexte
+' -----------------------------------------------------------------------------
+@startuml contexte
+!theme plain
+skinparam shadowing false
+title Diagramme de contexte — EcoScan Recycle
+
+actor "Utilisateur" as U
+actor "Administrateur" as A
+actor "Centre de\nrecyclage" as C
+
+package "EcoScan Recycle" #E8F5E9 {
+  [Frontend\nReact.js] as FE
+  [Backend\nExpress MVC] as BE
+  database "MongoDB" as DB
+  FE <--> BE
+  BE <--> DB
+}
+
+cloud "Services externes" {
+  [TensorFlow.js\nCOCO-SSD] as TF
+  [OpenStreetMap\nLeaflet] as OSM
+}
+
+U --> FE : Interface web
+U --> BE : Auth, scans,\nforum, RDV
+BE --> U : JWT, données,\npoints
+
+A --> BE : Modération,\nstats, users
+BE --> A : Dashboard,\nrapports
+
+C --> BE : Inbox RDV,\nprofil centre
+BE --> C : Notifications
+
+FE --> TF : Image → détection
+TF --> FE : Matériau suggéré
+
+BE --> OSM : Requêtes géo
+OSM --> BE : GeoJSON / tuiles
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 2 — Cas d'utilisation global
+' -----------------------------------------------------------------------------
+@startuml cas-utilisation-global
+!theme plain
+left to right direction
+skinparam shadowing false
+title Cas d'utilisation global — EcoScan Recycle
+
+actor Utilisateur as user
+actor Administrateur as admin
+actor "Centre de recyclage" as centre
+
+rectangle "EcoScan Recycle" {
+  usecase "S'inscrire / Se connecter" as UC1
+  usecase "Gérer son profil" as UC2
+  usecase "Scanner un déchet" as UC3
+  usecase "Consulter historique scans" as UC4
+  usecase "Localiser centres" as UC5
+  usecase "Demander rendez-vous" as UC6
+  usecase "Publier / commenter" as UC7
+  usecase "Consulter classement" as UC8
+  usecase "Suivre impact écologique" as UC9
+
+  usecase "Gérer utilisateurs" as UA1
+  usecase "Modérer publications" as UA2
+  usecase "Superviser centres" as UA3
+  usecase "Consulter statistiques" as UA4
+
+  usecase "Gérer informations centre" as UCe1
+  usecase "Consulter demandes RDV" as UCe2
+  usecase "Accepter / refuser RDV" as UCe3
+}
+
+user --> UC1
+user --> UC2
+user --> UC3
+user --> UC4
+user --> UC5
+user --> UC6
+user --> UC7
+user --> UC8
+user --> UC9
+
+admin --> UA1
+admin --> UA2
+admin --> UA3
+admin --> UA4
+
+centre --> UCe1
+centre --> UCe2
+centre --> UCe3
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 2 — Architecture MVC
+' -----------------------------------------------------------------------------
+@startuml architecture-mvc
+!theme plain
+skinparam componentStyle rectangle
+title Architecture logicielle MVC — EcoScan Recycle
+
+package "Couche Vue (Frontend)" {
+  [React Components] as React
+  [TensorFlow.js] as TF
+  [Leaflet Map] as Leaflet
+}
+
+package "Couche Contrôleur (Backend)" {
+  [Routes Express] as Routes
+  [Controllers] as Ctrl
+  [Middleware auth] as MW
+  [PointsService\nNotificationService] as Svc
+}
+
+package "Couche Modèle" {
+  [Mongoose Models] as Models
+  database "MongoDB" as DB
+}
+
+React --> Routes : REST JSON\nJWT
+TF --> React
+Leaflet --> React
+Routes --> MW
+MW --> Ctrl
+Ctrl --> Svc
+Ctrl --> Models
+Models --> DB
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 2 — Architecture physique
+' -----------------------------------------------------------------------------
+@startuml architecture-physique
+!theme plain
+title Architecture physique — EcoScan Recycle
+
+node "Client" {
+  artifact "Navigateur\n(Chrome)" as Browser
+}
+
+node "Serveur" {
+  artifact "API REST\nNode.js / Express" as API
+}
+
+node "Base de données" {
+  database "MongoDB Atlas" as Mongo
+}
+
+cloud "Externe" {
+  [TensorFlow.js CDN]
+  [OpenStreetMap]
+}
+
+Browser --> API : HTTPS / JSON
+API --> Mongo : MongoDB Wire Protocol
+Browser --> [TensorFlow.js CDN] : HTTPS
+Browser --> [OpenStreetMap] : HTTPS
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 3 — Classes Sprint 1 (Auth)
+' -----------------------------------------------------------------------------
+@startuml sprint1-classes
+!theme plain
+title Sprint 1 — Diagramme de classes (Authentification)
+
+class User {
+  +email : String
+  +passwordHash : String
+  +role : String
+  +points : Number
+  --
+  +comparePassword() : Boolean
+  +{static} hashPassword() : String
+}
+
+class RefreshToken <<embedded>> {
+  +tokenIdHash : String
+  +expiresAt : Date
+}
+
+User "1" *-- "0..*" RefreshToken
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 3 — Séquence : S'inscrire
+' -----------------------------------------------------------------------------
+@startuml seq-inscription
+!theme plain
+title Séquence — S'inscrire
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express API" as API
+database "MongoDB" as DB
+
+U -> R : Remplit formulaire
+R -> API : POST /api/auth/register
+API -> API : Valider + hashPassword()
+API -> DB : User.create()
+DB --> API : document user
+API -> API : Générer JWT + refresh token
+API --> R : 201 { accessToken, refreshToken, user }
+R --> U : Redirection accueil
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 3 — Séquence : Se connecter
+' -----------------------------------------------------------------------------
+@startuml seq-connexion
+!theme plain
+title Séquence — Se connecter
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express API" as API
+database "MongoDB" as DB
+
+U -> R : Email + mot de passe
+R -> API : POST /api/auth/login
+API -> DB : User.findOne({ email })
+DB --> API : user
+
+alt Mot de passe invalide
+  API --> R : 401 Unauthorized
+  R --> U : Message erreur
+else Mot de passe valide
+  API -> API : comparePassword()\nsignAccessToken()\ncreateRefreshToken()
+  API -> DB : Sauvegarder refresh token
+  API --> R : 200 { accessToken, refreshToken }
+  R -> R : Stocker tokens
+  R --> U : Accès plateforme
+end
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 4 — Classes Sprint 2
+' -----------------------------------------------------------------------------
+@startuml sprint2-classes
+!theme plain
+title Sprint 2 — Scan + Points
+
+class User {
+  +points : Number
+}
+
+class Scan {
+  +material : String
+  +recyclable : Boolean
+  +points : Number
+}
+
+class PointsHistory {
+  +pointsEarned : Number
+  +reason : String
+}
+
+User "1" --> "0..*" Scan
+User "1" --> "0..*" PointsHistory
+Scan "0..1" --> "0..1" PointsHistory
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 4 — Cas d'utilisation raffiné Sprint 2
+' -----------------------------------------------------------------------------
+@startuml sprint2-cu
+!theme plain
+left to right direction
+title Sprint 2 — Cas d'utilisation raffiné
+
+actor Utilisateur as U
+actor Système as S
+
+rectangle "Scan intelligent" {
+  usecase "Scanner un objet" as UC1
+  usecase "Importer une image" as UC2
+  usecase "Consulter résultat détection" as UC3
+  usecase "Consulter historique scans" as UC4
+  usecase "Gagner des points" as UC5
+}
+
+U --> UC1
+U --> UC2
+U --> UC3
+U --> UC4
+S --> UC5
+
+UC1 ..> UC2 : <<include>>
+UC1 ..> UC3 : <<include>>
+UC1 --> UC5
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 4 — Activité : Scanner un objet
+' -----------------------------------------------------------------------------
+@startuml activite-scanner
+!theme plain
+title Activité — Scanner un objet
+
+start
+:Ouvrir interface scan;
+
+if (Caméra ou upload ?) then (Caméra)
+  :Activer getUserMedia;
+  :Capturer image;
+else (Upload)
+  :Sélectionner fichier;
+endif
+
+:Charger modèle TensorFlow.js;
+:Détecter objets (COCO-SSD);
+
+if (Confiance > 50% ?) then (oui)
+  :Proposer matériau;
+else (non)
+  :Saisie manuelle matériau;
+endif
+
+:Valider label + matériau;
+:POST /api/scans + photo;
+:Créer Scan + PointsHistory;
+:Mettre à jour User.points;
+:Afficher résultat et points;
+
+stop
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 4 — Séquence : Scanner un objet
+' -----------------------------------------------------------------------------
+@startuml seq-scanner
+!theme plain
+title Séquence — Scanner un objet
+
+actor Utilisateur as U
+participant "React +\nTensorFlow.js" as R
+participant "Express" as API
+participant "PointsService" as PS
+database "MongoDB" as DB
+
+U -> R : Capture / upload image
+R -> R : model.detect(image)
+R --> U : Matériau suggéré
+U -> R : Confirmer et soumettre
+R -> API : POST /api/scans\n(multipart + JWT)
+API -> API : authMiddleware
+API -> DB : Scan.create()
+API -> PS : awardPoints(userId, scan)
+PS -> DB : PointsHistory.create()
+PS -> DB : User.updateOne($inc points)
+API --> R : 201 { scan, pointsEarned }
+R --> U : Confirmation
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 4 — Séquence : Consulter historique
+' -----------------------------------------------------------------------------
+@startuml seq-historique-scans
+!theme plain
+title Séquence — Consulter historique des scans
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express" as API
+database "MongoDB" as DB
+
+U -> R : Ouvrir historique (page N)
+R -> API : GET /api/scans/my?page=N
+API -> API : Vérifier JWT
+API -> DB : find + sort + skip + limit
+DB --> API : scans, total
+API --> R : 200 { scans, pagination }
+R --> U : Liste paginée
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — Classes Sprint 3 (Forum)
+' -----------------------------------------------------------------------------
+@startuml sprint3-classes
+!theme plain
+title Sprint 3 — Forum communautaire
+
+class User
+class Post {
+  +title : String
+  +content : String
+  +status : String
+}
+class Comment {
+  +content : String
+  +parentCommentId : ObjectId
+}
+
+User "1" --> "0..*" Post : authorId
+Post "1" --> "0..*" Comment : postId
+User "1" --> "0..*" Comment : authorId
+Comment "0..1" --> "0..*" Comment : réponses
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — §2.1 Cas d'utilisation raffiné Sprint 3
+' -----------------------------------------------------------------------------
+@startuml sprint3-cu
+!theme plain
+left to right direction
+skinparam shadowing false
+title Sprint 3 — Cas d'utilisation raffiné (Forum)
+
+actor Utilisateur as U
+actor Administrateur as A
+
+rectangle "Module communautaire" {
+  usecase "Créer une publication" as UC1
+  usecase "Modifier une publication" as UC2
+  usecase "Supprimer une publication" as UC3
+  usecase "Ajouter un commentaire" as UC4
+  usecase "Consulter les commentaires" as UC5
+  usecase "Upload des images" as UC6
+  usecase "Consulter le leaderboard" as UC7
+  usecase "Modérer les publications" as UC8
+}
+
+U --> UC1
+U --> UC2
+U --> UC3
+U --> UC4
+U --> UC5
+U --> UC7
+A --> UC8
+
+UC1 ..> UC6 : <<include>>
+UC4 ..> UC5 : <<extend>>
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — Activité : Créer une publication
+' -----------------------------------------------------------------------------
+@startuml activite-publication
+!theme plain
+title Activité — Créer une publication
+
+start
+:Ouvrir formulaire;
+:Saisir titre et contenu;
+
+if (Images ?) then (oui)
+  :Upload images;
+endif
+
+if (Données valides ?) then (oui)
+  :POST /api/forum/posts;
+  :Enregistrer MongoDB;
+  :Afficher confirmation;
+else (non)
+  :Message erreur;
+endif
+
+stop
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — §3.2 Activité : Ajouter un commentaire
+' -----------------------------------------------------------------------------
+@startuml activite-commentaire
+!theme plain
+title Activité — Ajouter un commentaire
+
+|Utilisateur|
+start
+:Ouvrir une publication;
+
+|Système|
+:Charger post et commentaires existants;
+
+|Utilisateur|
+:Rédiger le commentaire;
+
+|Système|
+if (Contenu valide ?) then (oui)
+  :POST /api/forum/posts/:id/comments;
+  :Valider JWT + longueur contenu;
+  :Comment.create({ postId, authorId, content });
+  :Retourner commentaire créé;
+  :Afficher le commentaire dans la liste;
+else (non)
+  :Afficher message d'erreur;
+endif
+
+|Utilisateur|
+stop
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — Séquence : Créer une publication
+' -----------------------------------------------------------------------------
+@startuml seq-publication
+!theme plain
+title Séquence — Créer une publication
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express" as API
+database "MongoDB" as DB
+
+U -> R : Titre, contenu, images
+R -> API : POST /api/forum/posts (JWT)
+API -> API : authMiddleware + validation
+API -> DB : Post.create()
+DB --> API : post
+API --> R : 201 { post }
+R --> U : Publication visible
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — §4.2.2 Séquence : Ajout d'un commentaire
+' -----------------------------------------------------------------------------
+@startuml seq-commentaire
+!theme plain
+title Séquence — Ajout d'un commentaire
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express" as API
+database "MongoDB" as DB
+
+U -> R : Ouvrir publication
+R -> API : GET /api/forum/posts/:id
+API -> DB : Post.findById + Comment.find({ postId })
+DB --> API : post + comments
+API --> R : 200 { post, comments }
+R --> U : Afficher discussion
+
+U -> R : Saisir commentaire
+R -> API : POST /api/forum/posts/:id/comments\n{ content } + JWT
+API -> API : authMiddleware + validation
+API -> DB : Comment.create({ postId, authorId, content })
+DB --> API : comment
+API --> R : 201 { comment }
+R -> R : Mettre à jour liste commentaires
+R --> U : Commentaire affiché
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 5 — Séquence : Consulter le classement
+' -----------------------------------------------------------------------------
+@startuml seq-leaderboard
+!theme plain
+title Séquence — Consulter le classement
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express" as API
+database "MongoDB" as DB
+
+U -> R : Accéder au leaderboard
+R -> API : GET /api/users/leaderboard
+API -> DB : find().sort({ points: -1 })
+DB --> API : utilisateurs triés
+API --> R : 200 { leaderboard, myRank }
+R --> U : Afficher classement
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 6 — Classes Sprint 4 (Géolocalisation)
+' -----------------------------------------------------------------------------
+@startuml sprint4-classes
+!theme plain
+title Sprint 4 — Géolocalisation et centres
+
+class User
+class City {
+  +cityName : String
+  +governorate : String
+  +country : String
+  +latitude : Number
+  +longitude : Number
+  --
+  +getCenters() : RecyclingCenter[]
+}
+class RecyclingCenter {
+  +cityId : ObjectId
+  +latitude : Number
+  +longitude : Number
+  +materialsAccepted : String[]
+}
+class MeetingRequest {
+  +status : String
+  +preferredDate : Date
+}
+
+City "1" --> "0..*" RecyclingCenter : contient
+User "1" --> "0..*" MeetingRequest : requesterId
+RecyclingCenter "1" --> "0..*" MeetingRequest : centerUserId
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 6 — §2.1 Cas d'utilisation raffiné Sprint 4
+' -----------------------------------------------------------------------------
+@startuml sprint4-cu
+!theme plain
+left to right direction
+skinparam shadowing false
+title Sprint 4 — Cas d'utilisation raffiné (Géolocalisation)
+
+actor Utilisateur as U
+actor Administrateur as A
+
+rectangle "Géolocalisation et centres" {
+  usecase "Consulter la carte" as UC1
+  usecase "Localiser les centres" as UC2
+  usecase "Rechercher les centres proches" as UC3
+  usecase "Consulter les détails\nd'un centre" as UC4
+  usecase "Demander un rendez-vous" as UC5
+  usecase "Gérer les centres\nde recyclage" as UC6
+}
+
+U --> UC1
+U --> UC2
+U --> UC3
+U --> UC4
+U --> UC5
+A --> UC6
+
+UC1 ..> UC2 : <<include>>
+UC3 ..> UC2 : <<include>>
+UC4 ..> UC3 : <<extend>>
+UC5 ..> UC4 : <<include>>
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 6 — Activité : Rechercher centres proches
+' -----------------------------------------------------------------------------
+@startuml activite-centres-proches
+!theme plain
+title Activité — Rechercher centres proches
+
+start
+:Ouvrir carte Leaflet;
+
+if (Géolocalisation autorisée ?) then (oui)
+  :getCurrentPosition();
+else (non)
+  :Message erreur\nou saisie manuelle;
+endif
+
+:GET /api/centers/nearby?lat&lng;
+:Calcul distance Haversine;
+:Trier par proximité;
+:Afficher marqueurs;
+
+stop
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 6 — §3.2 Activité : Demander un rendez-vous
+' -----------------------------------------------------------------------------
+@startuml activite-rendez-vous
+!theme plain
+title Activité — Demander un rendez-vous
+
+|Utilisateur|
+start
+:Sélectionner un centre sur la carte\nou dans la liste;
+
+:Remplir formulaire\n(date, message, matériau);
+
+|Système|
+if (Données valides ?) then (oui)
+  :POST /api/meetings;
+  :Vérifier JWT + centre existant;
+  :MeetingRequest.create();
+  :Créer notification pour le centre;
+  :Retourner confirmation;
+else (non)
+  :Afficher erreurs de validation;
+endif
+
+|Utilisateur|
+:Afficher statut « en attente »;
+stop
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 6 — §4.2.1 Séquence : Recherche des centres proches
+' -----------------------------------------------------------------------------
+@startuml seq-centres-proches
+!theme plain
+title Séquence — Recherche des centres proches
+
+actor Utilisateur as U
+participant "React +\nLeaflet" as R
+participant "Navigateur" as Nav
+participant "Express" as API
+database "MongoDB" as DB
+
+U -> R : Ouvrir page centres / carte
+R -> Nav : navigator.geolocation\n.getCurrentPosition()
+Nav --> R : { latitude, longitude }
+
+alt Géolocalisation refusée
+  R --> U : Message erreur\n+ saisie manuelle
+  U -> R : Saisir coordonnées ou ville
+else Position obtenue
+  R -> R : Centrer carte sur position
+endif
+
+R -> API : GET /api/centers/nearby?lat=X&lng=Y&radius=Z
+API -> DB : RecyclingCenter.find()\n+ filtre matériau (optionnel)
+DB --> API : liste centres
+API -> API : Calcul distance Haversine\n+ tri par proximité
+API --> R : 200 { centers, count }
+R -> R : Ajouter marqueurs Leaflet\n+ popups détails
+R --> U : Carte interactive avec centres
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 6 — Séquence : Demander un rendez-vous
+' -----------------------------------------------------------------------------
+@startuml seq-rendez-vous
+!theme plain
+title Séquence — Demander un rendez-vous
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express" as API
+participant "NotificationService" as NS
+database "MongoDB" as DB
+
+U -> R : Sélectionner centre + formulaire
+R -> API : POST /api/meetings (JWT)
+API -> DB : MeetingRequest.create()
+API -> NS : notifyCenter(meeting)
+NS -> DB : Notification.create()
+API --> R : 201 { meeting }
+R --> U : Confirmation
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 7 — §2.1 Cas d'utilisation raffiné Sprint 5
+' -----------------------------------------------------------------------------
+@startuml sprint5-cu
+!theme plain
+left to right direction
+skinparam shadowing false
+title Sprint 5 — Cas d'utilisation raffiné (Sécurité & Déploiement)
+
+actor Administrateur as A
+actor Système as S
+
+rectangle "Sécurisation et mise en production" {
+  usecase "Sécuriser les accès" as UC1
+  usecase "Déployer la plateforme" as UC2
+  usecase "Gérer les erreurs" as UC3
+  usecase "Surveiller les performances" as UC4
+  usecase "Optimiser les ressources" as UC5
+}
+
+A --> UC2
+A --> UC4
+S --> UC1
+S --> UC3
+S --> UC5
+
+UC2 ..> UC1 : <<include>>
+UC4 ..> UC3 : <<include>>
+UC5 ..> UC4 : <<extend>>
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 7 — Classes Sprint 5 (Sécurité)
+' -----------------------------------------------------------------------------
+@startuml sprint5-classes
+!theme plain
+title Sprint 5 — Sécurité et déploiement
+
+class AuthMiddleware {
+  +verifyToken(req, res, next)
+  +requireAdmin(req, res, next)
+}
+
+class TokenManager {
+  +signAccessToken(payload)
+  +createRefreshToken(userId)
+  +rotateRefreshToken(token)
+}
+
+class ErrorHandler {
+  +centralizedError(err, req, res, next)
+}
+
+AuthMiddleware --> TokenManager : utilise
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 7 — Séquence : Authentification sécurisée (refresh)
+' -----------------------------------------------------------------------------
+@startuml seq-auth-securisee
+!theme plain
+title Séquence — Authentification sécurisée (refresh token)
+
+actor Utilisateur as U
+participant "React" as R
+participant "Express" as API
+participant "TokenManager" as TM
+database "MongoDB" as DB
+
+R -> API : Requête + Bearer accessToken
+
+alt Token expiré
+  API --> R : 401
+  R -> API : POST /api/auth/refresh
+  API -> TM : rotateRefreshToken()
+  TM -> DB : Vérifier + révoquer ancien
+  TM --> API : nouveaux tokens
+  API --> R : 200 { accessToken, refreshToken }
+  R -> API : Retry requête initiale
+  API --> R : 200 données
+else Token valide
+  API --> R : 200 données
+end
+
+U <-- R : Réponse
+
+@enduml
+
+
+' -----------------------------------------------------------------------------
+' CHAPITRE 7 — Séquence : Déploiement
+' -----------------------------------------------------------------------------
+@startuml seq-deploiement
+!theme plain
+title Séquence — Déployer l'application
+
+actor Administrateur as A
+participant "CI / Build" as CI
+participant "Frontend\n(static)" as FE
+participant "Backend\n(Node.js)" as BE
+database "MongoDB Atlas" as Atlas
+
+A -> CI : npm run build (React)
+CI -> FE : Déployer fichiers statiques
+A -> CI : Déployer API
+CI -> BE : Configurer .env production
+BE -> Atlas : MONGODB_URI
+Atlas --> BE : Connexion OK
+BE --> A : Application en ligne
+
+@enduml

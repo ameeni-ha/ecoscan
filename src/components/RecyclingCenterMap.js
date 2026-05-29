@@ -1,141 +1,143 @@
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { useEffect, useMemo } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-// Create custom green icon for recycling centers
-const createRecyclingIcon = () => {
-  return new L.Icon({
-    iconUrl:
-      "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png",
-    shadowUrl:
-      "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
-    iconSize: [25, 41],
-    iconAnchor: [12, 41],
-    popupAnchor: [1, -34],
-    shadowSize: [41, 41],
-  });
-};
+const TUNISIA_CENTER = [34.0, 9.5];
+const TUNISIA_ZOOM = 7;
+
+export function normalizeCenterCoords(center) {
+  const lat = Number(center?.latitude ?? center?.lat);
+  const lon = Number(center?.longitude ?? center?.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < 30 || lat > 38.5 || lon < 7 || lon > 12.5) return null;
+  return { lat, lon };
+}
+
+const greenRecyclingIcon = L.divIcon({
+  className: "recycling-map-marker",
+  html: `<div class="recycling-map-pin" aria-hidden="true">
+    <span class="recycling-map-pin-icon">♻</span>
+  </div>`,
+  iconSize: [36, 44],
+  iconAnchor: [18, 44],
+  popupAnchor: [0, -40],
+});
+
+function MapBoundsFitter({ centers }) {
+  const map = useMap();
+  const points = useMemo(
+    () =>
+      centers
+        .map((c) => normalizeCenterCoords(c))
+        .filter(Boolean)
+        .map((c) => [c.lat, c.lon]),
+    [centers],
+  );
+
+  useEffect(() => {
+    if (points.length === 0) return;
+    if (points.length === 1) {
+      map.setView(points[0], 13);
+      return;
+    }
+    const bounds = L.latLngBounds(points);
+    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 12 });
+  }, [map, points]);
+
+  return null;
+}
 
 export default function RecyclingCenterMap({ centers, loading }) {
-  const [mapCenter, setMapCenter] = useState([34.0, 9.0]); // Default: Tunisia
-  const recyclingIcon = createRecyclingIcon();
+  const mappableCenters = useMemo(
+    () => centers.filter((c) => normalizeCenterCoords(c)),
+    [centers],
+  );
 
-  // Update map center based on centers
-  useEffect(() => {
-    if (centers.length > 0) {
-      const centerWithCoords = centers.find((c) => c.latitude && c.longitude);
-      if (centerWithCoords) {
-        setMapCenter([centerWithCoords.latitude, centerWithCoords.longitude]);
-      } else {
-        // Calculate center of all centers
-        const lats = centers
-          .filter((c) => c.latitude)
-          .map((c) => c.latitude);
-        const lons = centers
-          .filter((c) => c.longitude)
-          .map((c) => c.longitude);
-        if (lats.length > 0) {
-          const avgLat = lats.reduce((a, b) => a + b, 0) / lats.length;
-          const avgLon = lons.reduce((a, b) => a + b, 0) / lons.length;
-          setMapCenter([avgLat, avgLon]);
-        }
-      }
-    }
-  }, [centers]);
+  const mapCenter =
+    mappableCenters.length > 0
+      ? (() => {
+          const c = normalizeCenterCoords(mappableCenters[0]);
+          return c ? [c.lat, c.lon] : TUNISIA_CENTER;
+        })()
+      : TUNISIA_CENTER;
+
+  const mapZoom = mappableCenters.length <= 1 ? 11 : TUNISIA_ZOOM;
 
   return (
-    <div style={{ width: "100%", height: "500px", borderRadius: "8px", overflow: "hidden" }}>
+    <div className="recycling-map-wrap">
+      {!loading && centers.length > 0 && (
+        <div className="recycling-map-legend">
+          <span className="recycling-map-legend-dot" />
+          {mappableCenters.length} centre(s) sur la carte
+          {mappableCenters.length < centers.length && (
+            <span className="recycling-map-legend-muted">
+              {" "}
+              · {centers.length - mappableCenters.length} sans coordonnées GPS
+            </span>
+          )}
+        </div>
+      )}
+
       {loading ? (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            height: "100%",
-            backgroundColor: "#f5f5f5",
-          }}
-        >
+        <div className="recycling-map-placeholder">
           <p>Chargement de la carte…</p>
         </div>
-      ) : centers.length === 0 ? (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            height: "100%",
-            backgroundColor: "#f5f5f5",
-          }}
-        >
-          <p>Aucun centre à afficher sur la carte</p>
+      ) : mappableCenters.length === 0 ? (
+        <div className="recycling-map-placeholder">
+          <p>Aucun centre avec position GPS à afficher</p>
         </div>
       ) : (
         <MapContainer
           center={mapCenter}
-          zoom={centers.length > 0 ? 11 : 6}
-          style={{ height: "100%", width: "100%" }}
+          zoom={mapZoom}
+          className="recycling-map-container"
+          scrollWheelZoom
         >
           <TileLayer
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
-          {centers.map((center) =>
-            center.latitude && center.longitude ? (
+          <MapBoundsFitter centers={mappableCenters} />
+          {mappableCenters.map((center) => {
+            const coords = normalizeCenterCoords(center);
+            if (!coords) return null;
+            const markerKey = String(center._id || center.id || `${coords.lat}-${coords.lon}`);
+            return (
               <Marker
-                key={center._id || center.id}
-                position={[center.latitude, center.longitude]}
-                icon={recyclingIcon}
+                key={markerKey}
+                position={[coords.lat, coords.lon]}
+                icon={greenRecyclingIcon}
               >
                 <Popup>
-                  <div style={{ fontSize: "14px", minWidth: "250px" }}>
-                    <h4 style={{ margin: "0 0 8px 0", color: "#27ae60" }}>
-                      {center.centerName || "Centre de collecte"}
-                    </h4>
-                    {center.city && (
-                      <p style={{ margin: "4px 0", display: "flex", alignItems: "center" }}>
-                        <span style={{ marginRight: "6px" }}>📍</span>
+                  <div className="recycling-map-popup">
+                    <h4>{center.centerName || "Centre de recyclage"}</h4>
+                    {center.city ? (
+                      <p>
                         <b>{center.city}</b>
-                        {center.district ? ` - ${center.district}` : ""}
+                        {center.district ? ` · ${center.district}` : ""}
                       </p>
-                    )}
-                    {center.address && (
-                      <p style={{ margin: "4px 0", fontSize: "12px", color: "#555" }}>
-                        {center.address}
-                      </p>
-                    )}
-                    {center.openingHours && (
-                      <p style={{ margin: "4px 0", display: "flex", alignItems: "center" }}>
-                        <span style={{ marginRight: "6px" }}>⏰</span>
-                        {center.openingHours}
-                      </p>
-                    )}
-                    {center.phone && (
-                      <p style={{ margin: "4px 0", display: "flex", alignItems: "center" }}>
-                        <span style={{ marginRight: "6px" }}>📞</span>
-                        {center.phone}
-                      </p>
-                    )}
-                    {center.materialsAccepted?.length > 0 && (
-                      <p style={{ margin: "8px 0 0 0", fontSize: "12px" }}>
+                    ) : null}
+                    {center.address && center.address !== "N/A" ? (
+                      <p className="recycling-map-popup-muted">{center.address}</p>
+                    ) : null}
+                    {center.openingHours && center.openingHours !== "N/A" ? (
+                      <p>⏰ {center.openingHours}</p>
+                    ) : null}
+                    {center.phone ? <p>📞 {center.phone}</p> : null}
+                    {center.materialsAccepted?.length > 0 ? (
+                      <p>
                         <b>Matériaux:</b> {center.materialsAccepted.join(", ")}
                       </p>
-                    )}
-                    {center.rating && (
-                      <p style={{ margin: "4px 0", fontSize: "12px" }}>
-                        ⭐ {center.rating.toFixed(1)}/5 ({center.totalReviews} avis)
-                      </p>
-                    )}
-                    {center.capacityPerDayKg && (
-                      <p style={{ margin: "4px 0", fontSize: "12px", color: "#27ae60" }}>
-                        📦 Capacité: {center.capacityPerDayKg}kg/jour
-                      </p>
-                    )}
+                    ) : null}
+                    {center.source ? (
+                      <p className="recycling-map-popup-source">{center.source}</p>
+                    ) : null}
                   </div>
                 </Popup>
               </Marker>
-            ) : null
-          )}
+            );
+          })}
         </MapContainer>
       )}
     </div>

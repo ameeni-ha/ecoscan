@@ -10,7 +10,7 @@ export default function Profile() {
       firstName: user?.firstName || "",
       lastName: user?.lastName || "",
       phone: user?.phone || "",
-      adresse: user?.adresse || "",
+      address: user?.address || "",
     }),
     [user]
   );
@@ -76,7 +76,7 @@ export default function Profile() {
               </div>
               <div>
                 <label style={{ fontWeight: 700, fontSize: 13 }}>Adresse</label>
-                <input className="app-input" value={form.adresse} onChange={onChange("adresse")} />
+                <input className="app-input" value={form.address} onChange={onChange("address")} />
               </div>
             </div>
 
