@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { apiRequest } from "./api/client";
+import { useAuth } from "./context/AuthContext";
 
 export default function Leaderboard() {
+  const { user } = useAuth();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -29,7 +31,14 @@ export default function Leaderboard() {
         <div className="app-card">
           <div className="badge">🏆 View Leaderboard</div>
           <h2 style={{ margin: "10px 0 6px" }}>Leaderboard</h2>
-          <div className="app-muted">Classement basé sur les points gagnés via les scans.</div>
+          <div className="app-muted">
+            Classement des collecteurs selon les points gagnés via les scans recyclables.
+          </div>
+          {user?.points != null && (
+            <div className="form-info" style={{ marginTop: 12, marginBottom: 0 }}>
+              Vos points actuels : <strong>{user.points}</strong>
+            </div>
+          )}
 
           {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
 
@@ -55,7 +64,7 @@ export default function Leaderboard() {
                       <div className="badge">{r.points} pts</div>
                     </div>
                     <div className="app-muted" style={{ marginTop: 6 }}>
-                      Scans: <b>{r.scans}</b>
+                      Scans recyclables: <b>{r.scans}</b>
                     </div>
                   </div>
                 ))}

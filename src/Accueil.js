@@ -6,6 +6,39 @@ const Accueil = () => {
   const navigate = useNavigate();
   const { isAuthenticated } = useAuth();
 
+  const primaryPath = isAuthenticated ? "/scan" : "/connexion";
+  const accountPath = isAuthenticated ? "/dashboard" : "/inscription";
+
+  const highlights = [
+    {
+      icon: "🤖",
+      title: "Reconnaissance par IA",
+      text: "Analysez vos déchets en quelques secondes et recevez une consigne de tri claire.",
+    },
+    {
+      icon: "📍",
+      title: "Centres proches",
+      text: "Trouvez rapidement les points de collecte adaptés au plastique, verre, papier et métal.",
+    },
+    {
+      icon: "🏆",
+      title: "Points et classement",
+      text: "Transformez chaque geste en points et suivez votre progression écologique.",
+    },
+    {
+      icon: "💬",
+      title: "Communauté engagée",
+      text: "Partagez vos questions, astuces et initiatives locales avec les autres utilisateurs.",
+    },
+  ];
+
+  const materials = [
+    { name: "Plastique", detail: "Bouteilles, flacons et emballages propres" },
+    { name: "Papier", detail: "Journaux, cartons et feuilles non souillées" },
+    { name: "Verre", detail: "Bouteilles et bocaux sans bouchon" },
+    { name: "Métal", detail: "Canettes, boîtes et petits contenants" },
+  ];
+
   return (
     <div className="home-page">
       <header className="home-hero">
@@ -28,24 +61,47 @@ const Accueil = () => {
             <div className="home-hero-actions">
               <button
                 className="home-primary-btn"
-                onClick={() =>
-                  navigate(isAuthenticated ? "/dashboard" : "/connexion")
-                }
+                onClick={() => navigate(primaryPath)}
               >
-                {isAuthenticated ? "Ouvrir mon espace" : "Se connecter"}
+                {isAuthenticated ? "Scanner un objet" : "Commencer le scan"}
               </button>
               <button
                 className="home-secondary-btn"
-                onClick={() =>
-                  navigate(isAuthenticated ? "/dashboard" : "/inscription")
-                }
+                onClick={() => navigate(accountPath)}
               >
-                {isAuthenticated ? "Voir mon profil →" : "Creer un compte →"}
+                {isAuthenticated ? "Ouvrir mon espace →" : "Créer un compte →"}
               </button>
+            </div>
+            <div className="home-hero-trust">
+              <span>Tri guidé</span>
+              <span>Carte interactive</span>
+              <span>Impact mesurable</span>
             </div>
           </div>
 
-          <div className="home-hero-visual" />
+          <div className="home-hero-visual">
+            <div className="home-phone-card">
+              <div className="home-phone-top">
+                <span className="home-camera-dot" />
+                <span>EcoScan IA</span>
+              </div>
+              <div className="home-scan-preview">
+                <span className="home-scan-icon">♻️</span>
+                <span className="home-scan-ring" />
+              </div>
+              <div className="home-result-card">
+                <span className="home-result-label">Résultat</span>
+                <strong>Bouteille PET recyclable</strong>
+                <p>Déposez-la dans le bac plastique le plus proche.</p>
+              </div>
+            </div>
+            <div className="home-floating-card home-floating-card-top">
+              +25 pts
+            </div>
+            <div className="home-floating-card home-floating-card-bottom">
+              Centre à 850 m
+            </div>
+          </div>
         </div>
       </header>
 
@@ -65,6 +121,27 @@ const Accueil = () => {
         <div className="home-stat">
           <div className="home-stat-number">45</div>
           <div className="home-stat-label">Villes couvertes</div>
+        </div>
+      </section>
+
+      <section className="home-features">
+        <div className="home-section-heading">
+          <span className="home-section-kicker">Pourquoi EcoScan ?</span>
+          <h2>Une expérience complète pour mieux recycler</h2>
+          <p>
+            De l'identification de l'objet au suivi de votre impact, EcoScan
+            vous accompagne dans toutes les étapes du tri.
+          </p>
+        </div>
+
+        <div className="home-feature-grid">
+          {highlights.map((item) => (
+            <article className="home-feature-card" key={item.title}>
+              <div className="home-feature-icon">{item.icon}</div>
+              <h3>{item.title}</h3>
+              <p>{item.text}</p>
+            </article>
+          ))}
         </div>
       </section>
 
@@ -103,44 +180,86 @@ const Accueil = () => {
         </div>
       </section>
 
-      <section className="home-articles">
-        <h2>📊 Statistiques sur le recyclage en Tunisie</h2>
-        <p className="home-articles-subtitle">
-          Comprendre l'importance du recyclage pour notre environnement.
-        </p>
-
-        <div className="home-articles-grid">
-          <article className="home-article-card">
-            <div className="home-article-icon">🌍</div>
-            <h3>Impact environnemental</h3>
+      <section className="home-impact">
+        <div className="home-impact-card">
+          <div className="home-impact-content">
+            <span className="home-section-kicker">Impact personnel</span>
+            <h2>Visualisez les progrès de chaque geste</h2>
             <p>
-              La Tunisie produit environ <strong>2.5 millions de tonnes</strong> de déchets par an, dont seulement <strong>10%</strong> sont recyclés. Le recyclage d'une tonne de plastique économise <strong>1.5 tonnes de CO2</strong>.
+              Votre tableau de bord regroupe vos scans, points gagnés, déchets
+              évités et recommandations pour améliorer vos habitudes.
             </p>
-          </article>
+            <button
+              className="home-primary-btn"
+              onClick={() => navigate(accountPath)}
+            >
+              {isAuthenticated ? "Voir mon tableau de bord" : "Créer mon suivi"}
+            </button>
+          </div>
+          <div className="home-impact-panel">
+            <div className="home-impact-row">
+              <span>Scans ce mois</span>
+              <strong>36</strong>
+            </div>
+            <div className="home-impact-progress">
+              <span style={{ width: "72%" }} />
+            </div>
+            <div className="home-impact-metrics">
+              <div>
+                <strong>12 kg</strong>
+                <span>déchets triés</span>
+              </div>
+              <div>
+                <strong>8.4 kg</strong>
+                <span>CO2 évité</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
-          <article className="home-article-card">
-            <div className="home-article-icon">♻️</div>
-            <h3>Potentiel de recyclage</h3>
-            <p>
-              <strong>80% des déchets</strong> en Tunisie pourraient être recyclés mais ne le sont pas actuellement. Le secteur du recyclage pourrait créer <strong>50,000 emplois</strong> directs et indirects.
-            </p>
-          </article>
+      <section className="home-materials">
+        <div className="home-section-heading">
+          <span className="home-section-kicker">Guide rapide</span>
+          <h2>Les matériaux les plus courants</h2>
+          <p>
+            Quelques repères simples avant de scanner votre objet ou de chercher
+            un centre de collecte.
+          </p>
+        </div>
 
-          <article className="home-article-card">
-            <div className="home-article-icon">📈</div>
-            <h3>Économie circulaire</h3>
-            <p>
-              Chaque tonne de papier recyclée économise <strong>17 arbres</strong> et <strong>50% d'eau</strong> par rapport à la production de papier neuf. Le recyclage du verre permet d'économiser <strong>30% d'énergie</strong>.
-            </p>
-          </article>
+        <div className="home-material-grid">
+          {materials.map((material) => (
+            <article className="home-material-card" key={material.name}>
+              <h3>{material.name}</h3>
+              <p>{material.detail}</p>
+            </article>
+          ))}
+        </div>
+      </section>
 
-          <article className="home-article-card">
-            <div className="home-article-icon">🏭</div>
-            <h3>Industrie locale</h3>
-            <p>
-              La Tunisie compte <strong>13 centres de recyclage</strong> officiels et <strong>200+ points de collecte</strong> à travers le pays. L'industrie du recyclage représente un marché potentiel de <strong>500 millions de dinars</strong>.
-            </p>
-          </article>
+      <section className="home-community">
+        <div>
+          <span className="home-section-kicker">Communauté</span>
+          <h2>Partagez vos initiatives locales</h2>
+          <p>
+            Posez vos questions, signalez des points de collecte et découvrez
+            les bonnes pratiques des autres membres.
+          </p>
+        </div>
+        <div className="home-community-actions">
+          <button
+            className="home-primary-btn"
+            onClick={() => navigate(isAuthenticated ? "/forum" : "/connexion")}
+          >
+            Rejoindre le forum
+          </button>
+          <button
+            className="home-outline-dark-btn"
+            onClick={() => navigate("/centres")}
+          >
+            Voir les centres
+          </button>
         </div>
       </section>
 
@@ -154,9 +273,9 @@ const Accueil = () => {
           </p>
           <button
             className="home-primary-btn"
-            onClick={() => navigate(isAuthenticated ? "/dashboard" : "/inscription")}
+            onClick={() => navigate(accountPath)}
           >
-            {isAuthenticated ? "Acceder a mon espace" : "Demarrer avec un compte"}
+            {isAuthenticated ? "Accéder à mon espace" : "Démarrer avec un compte"}
           </button>
         </div>
       </section>

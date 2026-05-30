@@ -13,7 +13,7 @@ const TOKEN_STORAGE_KEY = "ecoscan.auth.token";
 const USER_STORAGE_KEY = "ecoscan.auth.user";
 
 const getStoredUser = () => {
-  const value = localStorage.getItem(USER_STORAGE_KEY);
+  const value = sessionStorage.getItem(USER_STORAGE_KEY);
   if (!value) {
     return null;
   }
@@ -21,17 +21,21 @@ const getStoredUser = () => {
   try {
     return JSON.parse(value);
   } catch (error) {
-    localStorage.removeItem(USER_STORAGE_KEY);
+    sessionStorage.removeItem(USER_STORAGE_KEY);
     return null;
   }
 };
 
 const saveSession = (token, user) => {
-  localStorage.setItem(TOKEN_STORAGE_KEY, token);
-  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+  sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+  localStorage.removeItem(TOKEN_STORAGE_KEY);
+  localStorage.removeItem(USER_STORAGE_KEY);
 };
 
 const clearSession = () => {
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  sessionStorage.removeItem(USER_STORAGE_KEY);
   localStorage.removeItem(TOKEN_STORAGE_KEY);
   localStorage.removeItem(USER_STORAGE_KEY);
 };
@@ -65,7 +69,7 @@ const request = async (path, options = {}) => {
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => getStoredUser());
-  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_STORAGE_KEY));
+  const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_STORAGE_KEY));
   const [isReady, setIsReady] = useState(false);
 
   const applySession = useCallback((nextToken, nextUser) => {
@@ -92,13 +96,8 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const restoreSession = async () => {
       if (!token) {
-        try {
-          await refreshSession();
-        } catch (error) {
-          resetSession();
-        } finally {
-          setIsReady(true);
-        }
+        resetSession();
+        setIsReady(true);
         return;
       }
 

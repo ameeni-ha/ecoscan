@@ -25,6 +25,11 @@ const Dashboard = () => {
                 {user?.firstName} {user?.lastName}
               </p>
               <p>{user?.email}</p>
+              {user?.points != null && (
+                <p style={{ marginTop: 8, fontWeight: 700, color: "#138047" }}>
+                  {user.points} points EcoScan
+                </p>
+              )}
               <button
                 type="button"
                 className="home-primary-btn"

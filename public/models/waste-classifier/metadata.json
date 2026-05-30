@@ -1,0 +1,47 @@
+{
+  "modelSettings": {
+    "inputSize": 224,
+    "labels": [
+      "battery",
+      "plastique",
+      "bouteille_plastique",
+      "cardboard",
+      "clothes",
+      "verre",
+      "papier_carton",
+      "metal",
+      "electronique",
+      "organique",
+      "non_recyclable",
+      "shoes",
+      "trash"
+    ],
+    "modelType": "image_classification"
+  },
+  "labels": [
+    "battery",
+    "plastique",
+    "bouteille_plastique",
+    "cardboard",
+    "clothes",
+    "verre",
+    "papier_carton",
+    "metal",
+    "electronique",
+    "organique",
+    "non_recyclable",
+    "shoes",
+    "trash"
+  ],
+  "modelName": "EcoScan Waste Classifier",
+  "modelVersion": "1.0",
+  "framework": "tensorflow",
+  "inputShape": [
+    224,
+    224,
+    3
+  ],
+  "outputShape": [
+    13
+  ]
+}

@@ -1,5 +1,5 @@
 export function canUseScan(user) {
-  return Boolean(user?.accountType === "collecteur");
+  return Boolean(user?.role !== "admin" && user?.accountType === "collecteur");
 }
 
 export function canForumComment(user) {

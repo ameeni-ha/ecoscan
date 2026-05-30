@@ -13,6 +13,26 @@ const MATERIALS = [
   { value: "organique", label: "Organique" },
 ];
 
+const MATERIAL_LABELS = {
+  plastic: "Plastique",
+  plastique: "Plastique",
+  paper: "Papier / carton",
+  papier_carton: "Papier / carton",
+  cardboard: "Carton",
+  glass: "Verre",
+  verre: "Verre",
+  metal: "Métal",
+  electronic: "Électronique",
+  electronique: "Électronique",
+  organic: "Organique",
+  mixed: "Mixte",
+};
+
+const formatMaterials = (materials) =>
+  Array.isArray(materials) && materials.length > 0
+    ? materials.map((m) => MATERIAL_LABELS[m] || m).join(", ")
+    : "Non précisé";
+
 export default function RecyclingCenters() {
   const { isAuthenticated } = useAuth();
 
@@ -187,9 +207,27 @@ export default function RecyclingCenters() {
                     </div>
                   </div>
                   <div className="app-muted" style={{ marginTop: 6 }}>
-                    {c.district ? `${c.district} • ` : ""}
-                    {c.openingHours && c.openingHours !== "N/A" ? `⏰ ${c.openingHours} • ` : ""}
-                    {c.phone ? `📞 ${c.phone}` : ""}
+                    {[c.address, c.district].filter(Boolean).join(" • ") || "Adresse non précisée"}
+                  </div>
+                  <div className="app-grid-2" style={{ marginTop: 10 }}>
+                    <div className="app-muted">
+                      <b>Horaires:</b> {c.openingHours && c.openingHours !== "N/A" ? c.openingHours : "Non précisé"}
+                    </div>
+                    <div className="app-muted">
+                      <b>Téléphone:</b> {c.phone || "Non précisé"}
+                    </div>
+                    <div className="app-muted">
+                      <b>Email:</b> {c.email || "Non précisé"}
+                    </div>
+                    <div className="app-muted">
+                      <b>Type:</b> {c.centerType || "Non précisé"}
+                    </div>
+                    <div className="app-muted">
+                      <b>Capacité:</b> {c.capacityPerDayKg ? `${c.capacityPerDayKg} kg/jour` : "Non précisé"}
+                    </div>
+                    <div className="app-muted">
+                      <b>Note:</b> {c.rating ? `${c.rating}/5${c.totalReviews ? ` (${c.totalReviews} avis)` : ""}` : "Non précisé"}
+                    </div>
                   </div>
                   {Number.isFinite(Number(c.latitude)) && Number.isFinite(Number(c.longitude)) ? (
                     <div className="app-muted" style={{ marginTop: 8 }}>
@@ -200,9 +238,20 @@ export default function RecyclingCenters() {
                       Position GPS non disponible
                     </div>
                   )}
-                  {c.materialsAccepted?.length ? (
-                    <div className="app-muted" style={{ marginTop: 10 }}>
-                      Matériaux: <b>{c.materialsAccepted.join(", ")}</b>
+                  <div className="app-muted" style={{ marginTop: 10 }}>
+                    Matériaux: <b>{formatMaterials(c.materialsAccepted)}</b>
+                  </div>
+                  {c.website ? (
+                    <div className="app-muted" style={{ marginTop: 8 }}>
+                      Site web:{" "}
+                      <a href={c.website} target="_blank" rel="noreferrer">
+                        {c.website}
+                      </a>
+                    </div>
+                  ) : null}
+                  {c.description ? (
+                    <div className="app-muted" style={{ marginTop: 8, lineHeight: 1.55 }}>
+                      {c.description}
                     </div>
                   ) : null}
                 </div>

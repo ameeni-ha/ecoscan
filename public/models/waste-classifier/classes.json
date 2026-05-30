@@ -1,0 +1,82 @@
+{
+  "classes": {
+    "battery": {
+      "label": "Pile / batterie",
+      "material": "electronique",
+      "recyclable": true,
+      "reason": "Les piles et batteries doivent être déposées en point de collecte spécialisé."
+    },
+    "plastique": {
+      "label": "Plastique",
+      "material": "plastique",
+      "recyclable": true,
+      "reason": "Le modèle déchets a reconnu un objet en plastique recyclable."
+    },
+    "bouteille_plastique": {
+      "label": "Bouteille plastique",
+      "material": "plastique",
+      "recyclable": true,
+      "reason": "Les bouteilles PET/PEHD propres sont recyclables."
+    },
+    "cardboard": {
+      "label": "Carton",
+      "material": "papier_carton",
+      "recyclable": true,
+      "reason": "Le carton propre et sec est recyclable."
+    },
+    "clothes": {
+      "label": "Vêtements",
+      "material": "autre",
+      "recyclable": false,
+      "reason": "Les vêtements doivent être orientés vers don, réemploi ou collecte textile spécialisée."
+    },
+    "verre": {
+      "label": "Verre",
+      "material": "verre",
+      "recyclable": true,
+      "reason": "Le modèle déchets a reconnu un objet en verre recyclable."
+    },
+    "papier_carton": {
+      "label": "Papier / carton",
+      "material": "papier_carton",
+      "recyclable": true,
+      "reason": "Le modèle déchets a reconnu du papier ou carton recyclable."
+    },
+    "metal": {
+      "label": "Métal",
+      "material": "metal",
+      "recyclable": true,
+      "reason": "Le modèle déchets a reconnu un objet métallique recyclable."
+    },
+    "electronique": {
+      "label": "Électronique",
+      "material": "electronique",
+      "recyclable": true,
+      "reason": "Les appareils électroniques doivent être déposés en point spécialisé."
+    },
+    "organique": {
+      "label": "Organique",
+      "material": "organique",
+      "recyclable": true,
+      "reason": "Le modèle déchets a reconnu un déchet organique compostable."
+    },
+    "non_recyclable": {
+      "label": "Non recyclable",
+      "material": "autre",
+      "recyclable": false,
+      "reason": "Le modèle déchets a reconnu un objet non recyclable ou hors filière."
+    },
+    "shoes": {
+      "label": "Chaussures",
+      "material": "autre",
+      "recyclable": false,
+      "reason": "Les chaussures doivent être orientées vers don, réemploi ou collecte textile spécialisée."
+    },
+    "trash": {
+      "label": "Déchet non recyclable",
+      "material": "autre",
+      "recyclable": false,
+      "reason": "Le modèle déchets a reconnu un déchet à jeter ou à vérifier selon les consignes locales."
+    }
+  }
+}

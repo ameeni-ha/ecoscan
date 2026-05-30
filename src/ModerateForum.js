@@ -3,7 +3,7 @@ import { apiRequest } from "./api/client";
 import { useAuth } from "./context/AuthContext";
 
 export default function ModerateForum() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -29,7 +29,7 @@ export default function ModerateForum() {
   const setStatus = async (postId, status) => {
     setError("");
     try {
-      const data = await apiRequest(`/forum/posts/${postId}/moderate`, {
+      const data = await apiRequest(`/admin/posts/${postId}/status`, {
         method: "PATCH",
         token,
         body: { status },
@@ -42,13 +42,28 @@ export default function ModerateForum() {
     }
   };
 
+  const deletePost = async (postId) => {
+    if (!window.confirm("Supprimer définitivement ce post ?")) return;
+    setError("");
+    try {
+      await apiRequest(`/admin/posts/${postId}`, { method: "DELETE", token });
+      setPosts((current) => current.filter((post) => post.id !== postId));
+    } catch (e) {
+      setError(e?.message || "Impossible de supprimer le post");
+    }
+  };
+
   return (
     <div className="app-page">
       <div className="app-container">
         <div className="app-card">
           <div className="badge">🛡️ Moderate forum</div>
           <h2 style={{ margin: "10px 0 6px" }}>Modération forum</h2>
-          <div className="app-muted">Cacher / ré-afficher un post.</div>
+          <div className="app-muted">
+            {user?.role === "admin"
+              ? "Cacher, ré-afficher ou supprimer un post."
+              : "Cacher / ré-afficher un post."}
+          </div>
 
           {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
 
@@ -83,6 +98,16 @@ export default function ModerateForum() {
                       >
                         {p.status === "published" ? "Cacher" : "Ré-afficher"}
                       </button>
+                      {user?.role === "admin" && (
+                        <button
+                          className="app-btn"
+                          style={{ color: "#d32f2f" }}
+                          type="button"
+                          onClick={() => deletePost(p.id)}
+                        >
+                          Supprimer
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

@@ -3,6 +3,7 @@ import { apiRequest } from "./api/client";
 import { useAuth } from "./context/AuthContext";
 
 const ROLES = ["client", "moderator", "admin"];
+const ACCOUNT_TYPES = ["collecteur", "centre_de_collecte"];
 
 export default function AdminUsers() {
   const { token } = useAuth();
@@ -28,17 +29,28 @@ export default function AdminUsers() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const changeRole = async (id, role) => {
+  const updateUser = async (id, updates) => {
     setError("");
     try {
       const data = await apiRequest(`/admin/users/${id}`, {
         method: "PATCH",
         token,
-        body: { role },
+        body: updates,
       });
       setUsers((current) => current.map((u) => (u.id === id ? data.user : u)));
     } catch (e) {
-      setError(e?.message || "Impossible de modifier le rôle");
+      setError(e?.message || "Impossible de modifier l'utilisateur");
+    }
+  };
+
+  const deleteUser = async (id) => {
+    if (!window.confirm("Supprimer cet utilisateur et ses contenus ?")) return;
+    setError("");
+    try {
+      await apiRequest(`/admin/users/${id}`, { method: "DELETE", token });
+      setUsers((current) => current.filter((u) => u.id !== id));
+    } catch (e) {
+      setError(e?.message || "Impossible de supprimer l'utilisateur");
     }
   };
 
@@ -48,7 +60,7 @@ export default function AdminUsers() {
         <div className="app-card">
           <div className="badge">👥 Manage Users</div>
           <h2 style={{ margin: "10px 0 6px" }}>Administration des utilisateurs</h2>
-          <div className="app-muted">Changer les rôles (client / moderator / admin).</div>
+          <div className="app-muted">Modifier les comptes, rôles et types d’utilisateur.</div>
 
           {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
 
@@ -74,12 +86,28 @@ export default function AdminUsers() {
                       <div className="badge">{u.accountType}</div>
                     </div>
                     <div className="app-row" style={{ marginTop: 10 }}>
+                      <div className="app-muted">Prénom</div>
+                      <input
+                        className="app-input"
+                        style={{ maxWidth: 180 }}
+                        value={u.firstName || ""}
+                        onChange={(e) => updateUser(u.id, { firstName: e.target.value })}
+                      />
+                      <div className="app-muted">Nom</div>
+                      <input
+                        className="app-input"
+                        style={{ maxWidth: 180 }}
+                        value={u.lastName || ""}
+                        onChange={(e) => updateUser(u.id, { lastName: e.target.value })}
+                      />
+                    </div>
+                    <div className="app-row" style={{ marginTop: 10 }}>
                       <div className="app-muted">Rôle</div>
                       <select
                         className="app-input"
                         style={{ maxWidth: 220 }}
                         value={u.role}
-                        onChange={(e) => changeRole(u.id, e.target.value)}
+                        onChange={(e) => updateUser(u.id, { role: e.target.value })}
                       >
                         {ROLES.map((r) => (
                           <option key={r} value={r}>
@@ -87,6 +115,27 @@ export default function AdminUsers() {
                           </option>
                         ))}
                       </select>
+                      <div className="app-muted">Type</div>
+                      <select
+                        className="app-input"
+                        style={{ maxWidth: 240 }}
+                        value={u.accountType}
+                        onChange={(e) => updateUser(u.id, { accountType: e.target.value })}
+                      >
+                        {ACCOUNT_TYPES.map((type) => (
+                          <option key={type} value={type}>
+                            {type}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="app-btn"
+                        style={{ color: "#d32f2f" }}
+                        type="button"
+                        onClick={() => deleteUser(u.id)}
+                      >
+                        Supprimer
+                      </button>
                     </div>
                   </div>
                 ))}

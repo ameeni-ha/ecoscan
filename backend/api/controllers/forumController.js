@@ -211,7 +211,7 @@ class ForumController {
       const post = await Post.findById(req.params.id);
       if (!post) return res.status(404).json({ message: "Post introuvable" });
 
-      if (post.authorId.toString() !== req.user._id.toString()) {
+      if (req.user.role !== "admin" && post.authorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Vous ne pouvez éditer que vos propres posts" });
       }
 
@@ -253,7 +253,7 @@ class ForumController {
         return res.status(404).json({ message: "Post introuvable" });
       }
 
-      if (post.authorId.toString() !== req.user._id.toString()) {
+      if (req.user.role !== "admin" && post.authorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Vous ne pouvez supprimer que vos propres posts" });
       }
 
@@ -272,7 +272,7 @@ class ForumController {
       const comment = await Comment.findById(req.params.commentId);
       if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
 
-      if (comment.authorId.toString() !== req.user._id.toString()) {
+      if (req.user.role !== "admin" && comment.authorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Vous ne pouvez éditer que vos propres commentaires" });
       }
 
@@ -296,7 +296,7 @@ class ForumController {
       const comment = await Comment.findById(req.params.commentId);
       if (!comment) return res.status(404).json({ message: "Commentaire introuvable" });
 
-      if (comment.authorId.toString() !== req.user._id.toString()) {
+      if (req.user.role !== "admin" && comment.authorId.toString() !== req.user._id.toString()) {
         return res.status(403).json({ message: "Vous ne pouvez supprimer que vos propres commentaires" });
       }
 

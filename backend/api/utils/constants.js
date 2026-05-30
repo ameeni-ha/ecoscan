@@ -13,6 +13,7 @@ const ALLOWED_MATERIALS = [
   "metal",
   "electronique",
   "organique",
+  "autre",
 ];
 
 const SCAN_MATERIAL_TO_CENTER_TAGS = {
@@ -22,6 +23,7 @@ const SCAN_MATERIAL_TO_CENTER_TAGS = {
   metal: ["metal"],
   electronique: ["electronic"],
   organique: ["organic"],
+  autre: [],
 };
 
 const MATERIAL_DATABASE = {
@@ -61,6 +63,12 @@ const MATERIAL_DATABASE = {
     instructions:
       "Composez les déchets organiques dans un composteur ou mettez dans le bac de compostage.",
   },
+  autre: {
+    recyclable: false,
+    points: 0,
+    instructions:
+      "Objet non reconnu comme recyclable par EcoScan. Consultez les consignes locales ou un centre spécialisé avant de le jeter.",
+  },
 };
 
 const OVERPASS_ENDPOINTS = [
@@ -69,10 +77,45 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass.nchc.org.tw/api/interpreter",
 ];
 
+// Must match train_waste_model.py CLASS_NAMES
+const DATASET_CLASS_NAMES = [
+  "battery",
+  "plastique",
+  "bouteille_plastique",
+  "cardboard",
+  "clothes",
+  "verre",
+  "papier_carton",
+  "metal",
+  "electronique",
+  "organique",
+  "non_recyclable",
+  "shoes",
+  "trash",
+];
+
+const DATASET_CLASS_LABELS = {
+  battery: "Pile / batterie",
+  plastique: "Plastique",
+  bouteille_plastique: "Bouteille plastique",
+  cardboard: "Carton",
+  clothes: "Vêtements",
+  verre: "Verre",
+  papier_carton: "Papier / carton",
+  metal: "Métal",
+  electronique: "Électronique",
+  organique: "Organique",
+  non_recyclable: "Non recyclable",
+  shoes: "Chaussures",
+  trash: "Déchet / ordures",
+};
+
 module.exports = {
   ALLOWED_CENTER_TYPES,
   ALLOWED_MATERIALS,
   SCAN_MATERIAL_TO_CENTER_TAGS,
   MATERIAL_DATABASE,
   OVERPASS_ENDPOINTS,
+  DATASET_CLASS_NAMES,
+  DATASET_CLASS_LABELS,
 };

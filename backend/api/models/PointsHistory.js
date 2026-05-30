@@ -22,7 +22,6 @@ const pointsHistorySchema = new mongoose.Schema(
     pointsEarned: {
       type: Number,
       required: true,
-      min: 0,
     },
     reason: {
       type: String,

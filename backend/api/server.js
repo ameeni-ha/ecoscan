@@ -11,7 +11,14 @@ const path = require("path");
 const multer = require("multer");
 const User = require("./models/User");
 const RecyclingCenter = require("./models/RecyclingCenter");
+const CenterController = require("./controllers/centerController");
 const createForumRoutes = require("./routes/forumRoutes");
+const createScanRoutes = require("./routes/scanRoutes");
+const createMeetingRoutes = require("./routes/meetingRoutes");
+const createUserRoutes = require("./routes/userRoutes");
+const createAdminRoutes = require("./routes/adminRoutes");
+const PointsService = require("./utils/PointsService");
+const { sanitizeUser: sanitizeUserFromHelpers } = require("./utils/helpers");
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -26,17 +33,7 @@ const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "7d";
 const REFRESH_COOKIE_NAME = "ecoscan_refresh_token";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
-const sanitizeUser = (user) => ({
-  id: user._id.toString(),
-  firstName: user.firstName,
-  lastName: user.lastName,
-  email: user.email,
-  role: user.role,
-  accountType: user.accountType,
-  phone: user.phone,
-  address: user.address,
-  createdAt: user.createdAt?.toISOString?.() || user.createdAt,
-});
+const sanitizeUser = (user) => sanitizeUserFromHelpers(user);
 
 const ALLOWED_CENTER_TYPES = [
   "centre_prive",
@@ -88,12 +85,13 @@ const createRefreshToken = (userId, tokenId) =>
   });
 
 const setRefreshTokenCookie = (res, refreshToken) => {
-  res.cookie(REFRESH_COOKIE_NAME, refreshToken, {
+  const cookieOptions = {
     httpOnly: true,
     secure: IS_PRODUCTION,
     sameSite: "lax",
-    maxAge: parseDurationMs(REFRESH_TOKEN_EXPIRES_IN),
-  });
+  };
+
+  res.cookie(REFRESH_COOKIE_NAME, refreshToken, cookieOptions);
 };
 
 const clearRefreshTokenCookie = (res) => {
@@ -136,6 +134,10 @@ const issueTokensForUser = async (user, previousTokenIdHash = null) => {
     tokenIdHash: refreshTokenIdHash,
     expiresAt: new Date(Date.now() + parseDurationMs(REFRESH_TOKEN_EXPIRES_IN)),
   });
+
+  if ((user.points || 0) < 0) {
+    user.points = 0;
+  }
 
   await user.save();
 
@@ -190,10 +192,30 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Forum routes (multipart uploads for photos)
 const forumUpload = multer({ dest: path.join(__dirname, "uploads") }).array("photos", 6);
+const scanUpload = multer({ dest: path.join(__dirname, "uploads") }).single("photo");
+
 app.use("/api/forum", authMiddleware, createForumRoutes(forumUpload));
+app.use("/api/scans", authMiddleware, createScanRoutes(scanUpload));
+app.use("/api/meetings", authMiddleware, createMeetingRoutes());
+app.use("/api/users", authMiddleware, createUserRoutes());
+app.use("/api/admin", authMiddleware, createAdminRoutes());
+
+const PYTHON_AI_URL = process.env.PYTHON_AI_URL || "http://127.0.0.1:5001";
 
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+app.get("/api/ai/health", async (req, res) => {
+  try {
+    const response = await axios.get(`${PYTHON_AI_URL}/health`, { timeout: 15000 });
+    return res.json({ status: "ok", ai: response.data });
+  } catch (error) {
+    return res.status(502).json({
+      status: "error",
+      message: "Service IA Python indisponible. Lancez: npm run ai",
+    });
+  }
 });
 
 app.post("/api/auth/register", (req, res) => {
@@ -381,6 +403,18 @@ app.post("/api/auth/logout-all", authMiddleware, (req, res) => {
 app.get("/api/auth/me", authMiddleware, (req, res) => {
   res.json({ user: sanitizeUser(req.user) });
 });
+
+app.get("/api/leaderboard", async (req, res) => {
+  try {
+    const limit = Math.min(Number.parseInt(String(req.query.limit || "50"), 10) || 50, 100);
+    const result = await PointsService.getLeaderboard(limit);
+    return res.json({ leaderboard: result.leaderboard });
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+app.get("/api/centers/nearby", (req, res) => CenterController.getNearby(req, res));
 
 // Get all recycling centers with filters
 app.get("/api/centers", async (req, res) => {

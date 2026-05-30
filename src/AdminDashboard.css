@@ -177,10 +177,100 @@
   color: #999;
 }
 
+.post-preview {
+  color: #777;
+  display: -webkit-box;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  margin-top: 6px;
+  max-width: 340px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .materials-list {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.admin-inline-input {
+  min-width: 130px;
+}
+
+.admin-modal-backdrop {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 1000;
+}
+
+.admin-modal {
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+  max-width: 620px;
+  padding: 24px;
+  width: min(100%, 620px);
+}
+
+.admin-modal-header {
+  align-items: flex-start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.admin-modal-header h2 {
+  color: #333;
+  margin: 10px 0 4px;
+}
+
+.admin-modal-close {
+  align-items: center;
+  background: #f5f5f5;
+  border: none;
+  border-radius: 50%;
+  color: #555;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 26px;
+  height: 38px;
+  justify-content: center;
+  line-height: 1;
+  width: 38px;
+}
+
+.admin-modal-close:hover {
+  background: #ffebee;
+  color: #d32f2f;
+}
+
+.admin-modal-form {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-modal-form label {
+  color: #555;
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.admin-modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 8px;
 }
 
 .material-badge {
@@ -253,10 +343,28 @@
   min-height: 40px;
 }
 
+.admin-btn.compact {
+  font-size: 12px;
+  min-height: 34px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
 .admin-btn:hover {
   border-color: #4CAF50;
   background: #f0f7f0;
   color: #4CAF50;
+}
+
+.admin-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.admin-btn:disabled:hover {
+  background: white;
+  border-color: #e0e0e0;
+  color: inherit;
 }
 
 .admin-btn.danger:hover {
@@ -268,6 +376,62 @@
 .action-buttons {
   display: flex;
   gap: 8px;
+}
+
+.comments-row td {
+  background: #fafafa;
+  padding: 0;
+}
+
+.admin-comments-panel {
+  border-top: 1px solid #e0e0e0;
+  padding: 18px 20px;
+}
+
+.comments-panel-title {
+  color: #333;
+  font-weight: 800;
+  margin-bottom: 12px;
+}
+
+.admin-comments-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-comment-card {
+  align-items: flex-start;
+  background: #fff;
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  display: flex;
+  gap: 14px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.comment-main {
+  min-width: 0;
+}
+
+.comment-meta {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.comment-date {
+  color: #999;
+  font-size: 12px;
+}
+
+.comment-content {
+  color: #444;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* États de chargement */

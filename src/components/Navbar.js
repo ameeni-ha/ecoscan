@@ -7,6 +7,7 @@ import { canUseScan } from "../utils/permissions";
 const Navbar = () => {
   const [open, setOpen] = useState(false);
   const { isAuthenticated, user, logout } = useAuth();
+  const isAdmin = user?.role === "admin";
 
   const handleLogout = async () => {
     setOpen(false);
@@ -40,7 +41,7 @@ const Navbar = () => {
           >
             Accueil
           </NavLink>
-          {isAuthenticated && (
+          {isAuthenticated && !isAdmin && (
             <NavLink
               to="/dashboard"
               className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}
@@ -58,7 +59,7 @@ const Navbar = () => {
               Scanner
             </NavLink>
           )}
-          {isAuthenticated && (
+          {isAuthenticated && !isAdmin && (
             <NavLink
               to="/forum"
               className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}
@@ -90,7 +91,7 @@ const Navbar = () => {
               Profil
             </NavLink>
           )}
-          {isAuthenticated && (
+          {isAuthenticated && !isAdmin && (
             <NavLink
               to="/rendez-vous"
               className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}
@@ -99,16 +100,16 @@ const Navbar = () => {
               Rendez-vous
             </NavLink>
           )}
-          {isAuthenticated && user?.role === "admin" && (
+          {isAuthenticated && isAdmin && (
             <NavLink
-              to="/admin/utilisateurs"
+              to="/admin/dashboard"
               className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}
               onClick={() => setOpen(false)}
             >
               Admin
             </NavLink>
           )}
-          {isAuthenticated && (user?.role === "moderator" || user?.role === "admin") && (
+          {isAuthenticated && user?.role === "moderator" && (
             <NavLink
               to="/moderation/forum"
               className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}

@@ -6,6 +6,26 @@ import "leaflet/dist/leaflet.css";
 const TUNISIA_CENTER = [34.0, 9.5];
 const TUNISIA_ZOOM = 7;
 
+const MATERIAL_LABELS = {
+  plastic: "Plastique",
+  plastique: "Plastique",
+  paper: "Papier / carton",
+  papier_carton: "Papier / carton",
+  cardboard: "Carton",
+  glass: "Verre",
+  verre: "Verre",
+  metal: "Métal",
+  electronic: "Électronique",
+  electronique: "Électronique",
+  organic: "Organique",
+  mixed: "Mixte",
+};
+
+const formatMaterials = (materials) =>
+  Array.isArray(materials) && materials.length > 0
+    ? materials.map((m) => MATERIAL_LABELS[m] || m).join(", ")
+    : "Non précisé";
+
 export function normalizeCenterCoords(center) {
   const lat = Number(center?.latitude ?? center?.lat);
   const lon = Number(center?.longitude ?? center?.lon);
@@ -125,10 +145,34 @@ export default function RecyclingCenterMap({ centers, loading }) {
                       <p>⏰ {center.openingHours}</p>
                     ) : null}
                     {center.phone ? <p>📞 {center.phone}</p> : null}
-                    {center.materialsAccepted?.length > 0 ? (
+                    {center.email ? <p>✉️ {center.email}</p> : null}
+                    {center.website ? (
                       <p>
-                        <b>Matériaux:</b> {center.materialsAccepted.join(", ")}
+                        🌐{" "}
+                        <a href={center.website} target="_blank" rel="noreferrer">
+                          Site web
+                        </a>
                       </p>
+                    ) : null}
+                    <p>
+                      <b>Matériaux:</b> {formatMaterials(center.materialsAccepted)}
+                    </p>
+                    {center.capacityPerDayKg ? (
+                      <p>
+                        <b>Capacité:</b> {center.capacityPerDayKg} kg/jour
+                      </p>
+                    ) : null}
+                    {center.rating ? (
+                      <p>
+                        <b>Note:</b> {center.rating}/5
+                        {center.totalReviews ? ` (${center.totalReviews} avis)` : ""}
+                      </p>
+                    ) : null}
+                    <p className="recycling-map-popup-muted">
+                      GPS: {coords.lat.toFixed(5)}, {coords.lon.toFixed(5)}
+                    </p>
+                    {center.description ? (
+                      <p className="recycling-map-popup-muted">{center.description}</p>
                     ) : null}
                     {center.source ? (
                       <p className="recycling-map-popup-source">{center.source}</p>

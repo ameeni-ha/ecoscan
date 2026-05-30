@@ -13,6 +13,7 @@ const MATERIAL_LABEL = {
   metal: "Métal",
   electronique: "Électronique",
   organique: "Organique",
+  autre: "Autre / non recyclable",
 };
 
 export default function ScanResult() {
@@ -200,6 +201,27 @@ export default function ScanResult() {
                   <span className="app-muted">Matériau : </span>
                   <strong>{materialHuman}</strong>
                 </div>
+                {(scan.detectedObject || scan.confidence || scan.detectionReason) ? (
+                  <div style={{ marginTop: 12, display: "grid", gap: 6 }}>
+                    {scan.detectedObject ? (
+                      <div>
+                        <span className="app-muted">Objet détecté par l'IA : </span>
+                        <strong>{scan.detectedObject}</strong>
+                      </div>
+                    ) : null}
+                    {scan.confidence ? (
+                      <div>
+                        <span className="app-muted">Confiance : </span>
+                        <strong>{scan.confidence}%</strong>
+                      </div>
+                    ) : null}
+                    {scan.detectionReason ? (
+                      <div className="app-muted" style={{ lineHeight: 1.55 }}>
+                        {scan.detectionReason}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
 
               {!scan.recyclable ? (

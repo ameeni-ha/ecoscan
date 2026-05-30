@@ -1,12 +1,8 @@
 const express = require("express");
 const MeetingController = require("../controllers/meetingController");
-const authMiddleware = require("../middleware/auth");
 
 const createMeetingRoutes = () => {
   const router = express.Router();
-
-  // Toutes les routes nécessitent l'authentification
-  router.use(authMiddleware);
 
   // POST /api/meetings - Créer une demande
   router.post("/", (req, res) => MeetingController.createMeeting(req, res));

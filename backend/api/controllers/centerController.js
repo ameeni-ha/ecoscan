@@ -159,11 +159,15 @@ class CenterController {
                   .filter(Boolean)
               : [],
             address: el.tags?.["addr:full"] || el.tags?.["addr:street"] || "N/A",
-            city: el.tags?.["addr:city"] || country,
-            phone: el.tags?.phone || "",
+            city: el.tags?.["addr:city"] || el.tags?.["addr:town"] || el.tags?.["addr:village"] || country,
+            district: el.tags?.["addr:suburb"] || el.tags?.["addr:district"] || "",
+            phone: el.tags?.phone || el.tags?.contact_phone || el.tags?.["contact:phone"] || "",
+            email: el.tags?.email || el.tags?.["contact:email"] || "",
+            website: el.tags?.website || el.tags?.["contact:website"] || "",
             openingHours: el.tags?.opening_hours || "N/A",
             centerType: "public",
-            description: el.tags?.description || "",
+            operator: el.tags?.operator || "",
+            description: el.tags?.description || el.tags?.amenity || "",
             source: "OpenStreetMap Overpass API",
           };
         })

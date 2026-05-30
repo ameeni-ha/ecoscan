@@ -26,10 +26,12 @@ function CommentItem({
   handleSaveEdit,
   editSending,
   handleDelete,
+  canManageAll,
 }) {
   const children = childrenByParent.get(comment.id) || [];
   const atLabel = accountTypeLabel(comment.author?.accountType);
   const isOwner = currentUserId && comment.author?.id === currentUserId;
+  const canManage = canManageAll || isOwner;
   const isEditing = editingId === comment.id;
   const isReplying = replyToId === comment.id;
 
@@ -60,7 +62,7 @@ function CommentItem({
               </div>
               <div className="app-muted">{formatRelativeTime(comment.createdAt)}</div>
             </div>
-            {isOwner ? (
+            {canManage ? (
               <div style={{ display: "flex", gap: 6 }}>
                 <button
                   className="forum-action-btn"
@@ -136,6 +138,7 @@ function CommentItem({
               handleSaveEdit={handleSaveEdit}
               editSending={editSending}
               handleDelete={handleDelete}
+              canManageAll={canManageAll}
             />
           ))}
         </div>
@@ -149,6 +152,7 @@ export default function PostDetail() {
   const navigate = useNavigate();
   const { token, user } = useAuth();
   const canComment = canForumComment(user);
+  const canManageForum = user?.role === "admin";
 
   const [post, setPost] = useState(null);
   const [comments, setComments] = useState([]);
@@ -304,7 +308,7 @@ export default function PostDetail() {
                 setReplyDraft={setReplyDraft}
                 sendReply={sendReply}
                 sending={sending}
-                currentUserId={user?._id}
+                currentUserId={user?.id || user?._id}
                 editingId={editingId}
                 setEditingId={setEditingId}
                 editContent={editContent}
@@ -312,6 +316,7 @@ export default function PostDetail() {
                 handleSaveEdit={handleSaveEdit}
                 editSending={editSending}
                 handleDelete={handleDelete}
+                canManageAll={canManageForum}
               />
             ))}
           </div>

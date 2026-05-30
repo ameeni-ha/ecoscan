@@ -39,6 +39,30 @@ const scanSchema = new mongoose.Schema(
       default: "",
       trim: true,
     },
+    detectedObject: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 140,
+    },
+    confidence: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100,
+    },
+    detectionStatus: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 60,
+    },
+    detectionReason: {
+      type: String,
+      default: "",
+      trim: true,
+      maxlength: 500,
+    },
   },
   { timestamps: true }
 );
