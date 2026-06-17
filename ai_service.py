@@ -278,5 +278,5 @@ if __name__ == "__main__":
     print("Chargement du modele Keras au demarrage...")
     load_assets()
     print(f"Modele pret: {MODEL_PATH} ({len(get_labels())} classes)")
-    port = int(os.environ.get("ECOSCAN_AI_PORT", "5001"))
-    app.run(host="127.0.0.1", port=port, debug=False)
+    port = int(os.environ.get("PORT", os.environ.get("ECOSCAN_AI_PORT", "5001")))
+    app.run(host="0.0.0.0", port=port, debug=False)
