@@ -1,5 +1,5 @@
 import * as tf from "@tensorflow/tfjs";
-import * as coco from "@tensorflow-models/coco-ssd";
+import * as mobilenet from "@tensorflow-models/mobilenet";
 
 let model = null;
 let wasteClassifierModel = null;
@@ -10,14 +10,17 @@ let wasteClassifierLabelMismatch = false;
 
 const WASTE_CLASSIFIER_BASE_URL =
   process.env.REACT_APP_WASTE_MODEL_URL || "/models/waste-classifier";
+const WASTE_CLASSIFIER_CACHE_BUST = "2026-06-14-tm-preprocess-v1";
 const WASTE_CLASSIFIER_INPUT_SIZE = 224;
+const WASTE_CLASSIFIER_MIN_CONFIDENCE = 60;
+const WASTE_CLASSIFIER_MIN_MARGIN = 10;
 
-// Load the COCO-SSD model
+// Load the custom waste classifier and the generic MobileNet fallback.
 export const loadModel = async () => {
   await loadWasteClassifier();
   if (model) return model;
   try {
-    model = await coco.load();
+    model = await mobilenet.load({ version: 2, alpha: 1.0 });
     return model;
   } catch (error) {
     console.error("Erreur lors du chargement du modèle:", error);
@@ -31,9 +34,9 @@ const loadWasteClassifier = async () => {
 
   try {
     const [loadedModel, metadataResponse, classConfigResponse] = await Promise.all([
-      tf.loadLayersModel(`${WASTE_CLASSIFIER_BASE_URL}/model.json`),
-      fetch(`${WASTE_CLASSIFIER_BASE_URL}/metadata.json`),
-      fetch(`${WASTE_CLASSIFIER_BASE_URL}/classes.json`).catch(() => null),
+      tf.loadLayersModel(`${WASTE_CLASSIFIER_BASE_URL}/model.json?v=${WASTE_CLASSIFIER_CACHE_BUST}`),
+      fetch(`${WASTE_CLASSIFIER_BASE_URL}/metadata.json?v=${WASTE_CLASSIFIER_CACHE_BUST}`),
+      fetch(`${WASTE_CLASSIFIER_BASE_URL}/classes.json?v=${WASTE_CLASSIFIER_CACHE_BUST}`).catch(() => null),
     ]);
 
     if (!metadataResponse.ok) {
@@ -78,6 +81,31 @@ const IRRELEVANT_CLASSES = new Set([
   "dining table",
 ]);
 
+// MobileNet only (for hybrid scan: object name in browser, material via Python/Keras)
+const MOBILENET_ONLY_MIN_SCORE = 0.12;
+
+export const detectObjectsWithMobileNetOnly = async (imageElement) => {
+  try {
+    if (!model) {
+      model = await mobilenet.load({ version: 2, alpha: 1.0 });
+    }
+    const predictions = await model.classify(imageElement, 8);
+    return predictions
+      .map((p) => ({
+        class: String(p.className || "").split(",")[0].trim(),
+        className: p.className,
+        score: p.probability || 0,
+        bbox: [0, 0, getImageSize(imageElement).width, getImageSize(imageElement).height],
+      }))
+      .filter((p) => p.score >= MOBILENET_ONLY_MIN_SCORE)
+      .filter((p) => !IRRELEVANT_CLASSES.has(String(p.class || "").toLowerCase()))
+      .sort((a, b) => getDetectionPriority(b, imageElement) - getDetectionPriority(a, imageElement));
+  } catch (error) {
+    console.error("Erreur MobileNet:", error);
+    throw error;
+  }
+};
+
 // Detect objects in an image
 export const detectObjects = async (imageElement) => {
   try {
@@ -87,9 +115,16 @@ export const detectObjects = async (imageElement) => {
     }
 
     const loadedModel = await loadModel();
-    const predictions = await loadedModel.detect(imageElement, 12, MIN_DETECTION_SCORE);
+    const predictions = await loadedModel.classify(imageElement, 8);
 
     return predictions
+      .map((p) => ({
+        class: String(p.className || "").split(",")[0].trim(),
+        className: p.className,
+        score: p.probability || 0,
+        bbox: [0, 0, getImageSize(imageElement).width, getImageSize(imageElement).height],
+      }))
+      .filter((p) => p.score >= MIN_DETECTION_SCORE)
       .filter((p) => !IRRELEVANT_CLASSES.has(String(p.class || "").toLowerCase()))
       .sort((a, b) => getDetectionPriority(b, imageElement) - getDetectionPriority(a, imageElement));
   } catch (error) {
@@ -99,6 +134,12 @@ export const detectObjects = async (imageElement) => {
 };
 
 const MATERIAL_CLASSIFICATION = {
+  "water bottle": {
+    material: "plastique",
+    recyclable: true,
+    label: "Bouteille plastique",
+    reason: "MobileNet reconnaît une bouteille. Les bouteilles PET/PEHD propres sont généralement recyclables.",
+  },
   bottle: {
     material: "plastique",
     recyclable: true,
@@ -154,6 +195,12 @@ const MATERIAL_CLASSIFICATION = {
     reason: "Le métal est recyclable dans les filières adaptées.",
   },
   "cell phone": {
+    material: "electronique",
+    recyclable: true,
+    label: "Téléphone",
+    reason: "Les appareils électroniques doivent être déposés en point spécialisé.",
+  },
+  "cellular telephone": {
     material: "electronique",
     recyclable: true,
     label: "Téléphone",
@@ -288,98 +335,35 @@ const MATERIAL_CLASSIFICATION = {
 };
 
 const MATERIAL_WORDS = [
-  { pattern: /bottle|plastic|pet|flacon|bidon/i, material: "plastique", recyclable: true },
-  { pattern: /glass|verre|jar|bocal/i, material: "verre", recyclable: true },
-  { pattern: /paper|carton|cardboard|box|book|papier/i, material: "papier_carton", recyclable: true },
-  { pattern: /metal|can|tin|aluminum|alu|boite/i, material: "metal", recyclable: true },
-  { pattern: /phone|laptop|computer|tv|keyboard|mouse|electronic/i, material: "electronique", recyclable: true },
-  { pattern: /food|organic|apple|banana|orange|carrot|pizza/i, material: "organique", recyclable: true },
+  { pattern: /bottle|plastic|pet|flacon|bidon|water bottle|pop bottle/i, material: "plastique", recyclable: true },
+  { pattern: /glass|verre|jar|bocal|wine bottle|beer bottle/i, material: "verre", recyclable: true },
+  { pattern: /paper|carton|cardboard|box|book|papier|envelope|packet/i, material: "papier_carton", recyclable: true },
+  { pattern: /metal|can|tin|aluminum|alu|boite|steel|iron/i, material: "metal", recyclable: true },
+  { pattern: /phone|laptop|computer|tv|keyboard|mouse|electronic|cellular telephone|remote|monitor/i, material: "electronique", recyclable: true },
+  { pattern: /food|organic|apple|banana|orange|carrot|pizza|vegetable|fruit/i, material: "organique", recyclable: true },
 ];
 
 const WASTE_LABEL_RULES = [
   {
-    pattern: /battery|batterie|pile/i,
-    material: "electronique",
+    pattern: /^recyclable$/i,
+    material: "recyclable",
     recyclable: true,
-    label: "Pile / batterie",
-    reason: "Les piles et batteries doivent être déposées en point de collecte spécialisé.",
+    label: "Recyclable",
+    reason: "Le modèle TensorFlow MobileNet classe cet objet comme recyclable.",
   },
   {
-    pattern: /plastique|plastic|pet|bouteille|bottle|flacon|bidon/i,
-    material: "plastique",
+    pattern: /recyclage[_\s-]*specialise|recyclage[_\s-]*spécialisé|specialized|special/i,
+    material: "recyclage_specialise",
     recyclable: true,
-    label: "Plastique recyclable",
-    reason: "Le modèle personnalisé a reconnu un objet plastique recyclable.",
-  },
-  {
-    pattern: /verre|glass|bocal|jar|bouteille verre/i,
-    material: "verre",
-    recyclable: true,
-    label: "Verre recyclable",
-    reason: "Le modèle personnalisé a reconnu du verre recyclable.",
-  },
-  {
-    pattern: /cardboard|carton/i,
-    material: "papier_carton",
-    recyclable: true,
-    label: "Carton recyclable",
-    reason: "Le modèle personnalisé a reconnu du carton recyclable.",
-  },
-  {
-    pattern: /clothes|vetement|vêtement|textile|habit/i,
-    material: "autre",
-    recyclable: false,
-    label: "Vêtements",
-    reason: "Les vêtements doivent être orientés vers don, réemploi ou collecte textile spécialisée.",
-  },
-  {
-    pattern: /papier|paper|carton|cardboard|box|livre/i,
-    material: "papier_carton",
-    recyclable: true,
-    label: "Papier / carton recyclable",
-    reason: "Le modèle personnalisé a reconnu du papier ou carton recyclable.",
-  },
-  {
-    pattern: /metal|métal|canette|can|aluminium|aluminum|boite/i,
-    material: "metal",
-    recyclable: true,
-    label: "Métal recyclable",
-    reason: "Le modèle personnalisé a reconnu du métal recyclable.",
-  },
-  {
-    pattern: /electronique|électronique|electronic|phone|laptop|ordinateur|clavier|tv/i,
-    material: "electronique",
-    recyclable: true,
-    label: "Électronique recyclable",
-    reason: "Le modèle personnalisé a reconnu un objet électronique à déposer en point spécialisé.",
-  },
-  {
-    pattern: /organique|organic|food|aliment|fruit|légume|compost/i,
-    material: "organique",
-    recyclable: true,
-    label: "Organique compostable",
-    reason: "Le modèle personnalisé a reconnu un déchet organique compostable.",
-  },
-  {
-    pattern: /shoes|chaussure|basket/i,
-    material: "autre",
-    recyclable: false,
-    label: "Chaussures",
-    reason: "Les chaussures doivent être orientées vers don, réemploi ou collecte textile spécialisée.",
-  },
-  {
-    pattern: /trash|garbage|ordure|dechet|déchet/i,
-    material: "autre",
-    recyclable: false,
-    label: "Déchet non recyclable",
-    reason: "Le modèle personnalisé a reconnu un déchet à jeter ou à vérifier selon les consignes locales.",
+    label: "Recyclage spécialisé",
+    reason: "Le modèle TensorFlow MobileNet recommande une filière spécialisée.",
   },
   {
     pattern: /non.?recyclable|not.?recyclable|déchet|trash|autre|other/i,
     material: "autre",
     recyclable: false,
     label: "Non recyclable",
-    reason: "Le modèle personnalisé a reconnu un objet non recyclable ou hors filière.",
+    reason: "Le modèle TensorFlow MobileNet a reconnu un objet non recyclable ou hors filière.",
   },
 ];
 
@@ -391,9 +375,68 @@ const normalizeLabelKey = (value) =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[\s-]+/g, "_");
 
+const MATERIAL_FROM_TM_LABEL = [
+  { pattern: /plastique|plastic|pet|bouteille|flacon|bidon/, material: "plastique", label: "Plastique" },
+  { pattern: /verre|glass|bocal|jar/, material: "verre", label: "Verre" },
+  { pattern: /papier_carton|papier|paper|carton|cardboard/, material: "papier_carton", label: "Papier / carton" },
+  { pattern: /metal|metaux|métaux|aluminium|canette/, material: "metal", label: "Métal" },
+  { pattern: /electronique|electronic|deee|telephone|phone|batterie|battery|pile|chargeur/, material: "electronique", label: "Électronique" },
+  { pattern: /organique|organic|compost|food|aliment/, material: "organique", label: "Organique" },
+];
+
+const SORTING_CLASS_LABELS = {
+  recyclable: "Recyclable",
+  non_recyclable: "Non recyclable",
+  recyclage_specialise: "Recyclage spécialisé",
+};
+
+const inferSortingClass = (labelKey, material, recyclable) => {
+  if (/non_recyclable|nonrecyclable|not_recyclable|trash|dechet|déchet/.test(labelKey)) {
+    return "non_recyclable";
+  }
+  if (/recyclage_specialise|recyclage_specialisé|specialise|spécialisé|specialized|deee/.test(labelKey)) {
+    return "recyclage_specialise";
+  }
+  if (recyclable === false || material === "autre") return "non_recyclable";
+  return "recyclable";
+};
+
+const inferConfiguredWasteClass = (label) => {
+  const labelKey = normalizeLabelKey(label);
+  const materialMatch = MATERIAL_FROM_TM_LABEL.find((entry) => entry.pattern.test(labelKey));
+
+  if (!materialMatch && !/recyclable|specialise|spécialisé|specialized|deee|dechet|déchet|trash/.test(labelKey)) {
+    return null;
+  }
+
+  const sortingClass = inferSortingClass(labelKey, materialMatch?.material || "autre", undefined);
+  const recyclable = sortingClass !== "non_recyclable";
+  const material =
+    sortingClass === "non_recyclable"
+      ? "autre"
+      : materialMatch?.material || (sortingClass === "recyclage_specialise" ? "recyclage_specialise" : "recyclable");
+  const materialLabel = materialMatch?.label || SORTING_CLASS_LABELS[sortingClass];
+
+  return {
+    label:
+      materialMatch && SORTING_CLASS_LABELS[sortingClass]
+        ? `${materialLabel} - ${SORTING_CLASS_LABELS[sortingClass]}`
+        : materialLabel || label,
+    material,
+    sortingClass,
+    recyclable,
+    reason:
+      sortingClass === "recyclage_specialise"
+        ? "Le modèle TensorFlow MobileNet recommande une filière spécialisée pour cette matière."
+        : sortingClass === "non_recyclable"
+        ? "Le modèle TensorFlow MobileNet classe cet objet comme non recyclable."
+        : "Le modèle TensorFlow MobileNet a reconnu une matière recyclable.",
+  };
+};
+
 const getConfiguredWasteClass = (label) => {
   const classes = wasteClassifierClassConfig?.classes;
-  if (!classes) return null;
+  if (!classes) return inferConfiguredWasteClass(label);
 
   if (Array.isArray(classes)) {
     return classes.find((entry) => {
@@ -409,25 +452,48 @@ const getConfiguredWasteClass = (label) => {
   const matchedKey = Object.keys(classes).find(
     (key) => normalizeLabelKey(key) === normalizedLabel
   );
-  return matchedKey ? classes[matchedKey] : null;
+  return matchedKey ? classes[matchedKey] : inferConfiguredWasteClass(label);
 };
 
-const classifyWasteLabel = (label, confidence) => {
+const isTeachableMachineExport = () =>
+  Boolean(wasteClassifierMetadata?.tmVersion) ||
+  wasteClassifierMetadata?.packageName === "@teachablemachine/image";
+
+const preprocessWasteClassifierImage = (imageElement) =>
+  tf.tidy(() => {
+    const imageTensor = tf.browser
+      .fromPixels(imageElement)
+      .resizeBilinear([WASTE_CLASSIFIER_INPUT_SIZE, WASTE_CLASSIFIER_INPUT_SIZE])
+      .toFloat();
+
+    const normalized = isTeachableMachineExport()
+      ? imageTensor.div(127.5).sub(1)
+      : imageTensor.div(255);
+
+    return normalized.expandDims(0);
+  });
+
+const classifyWasteLabel = (label, confidence, margin = 100) => {
   const configuredClass = getConfiguredWasteClass(label);
+  const isReliable = confidence >= WASTE_CLASSIFIER_MIN_CONFIDENCE && margin >= WASTE_CLASSIFIER_MIN_MARGIN;
 
   if (configuredClass) {
-    const isRecyclable = Boolean(configuredClass.recyclable) && confidence >= 55;
+    const isRecyclable = Boolean(configuredClass.recyclable) && isReliable;
     return {
       material: configuredClass.material || "autre",
       confidence,
       detectedObject: configuredClass.label || configuredClass.name || label || "Objet détecté",
       rawDetectedObject: label || "",
       recyclable: isRecyclable,
-      detectionStatus: confidence >= 55 ? "custom_model_configured" : "custom_model_low_confidence",
+      sortingClass:
+        configuredClass.sortingClass ||
+        configuredClass.triClass ||
+        inferSortingClass(normalizeLabelKey(label), configuredClass.material || "autre", configuredClass.recyclable),
+      detectionStatus: isReliable ? "custom_model_configured" : "custom_model_low_confidence",
       reason:
-        confidence >= 55
+        isReliable
           ? configuredClass.reason || "Classe reconnue par le modèle déchets personnalisé."
-          : "Le modèle personnalisé hésite. Reprenez une photo plus nette avant de trier.",
+          : "Le modèle personnalisé hésite. Corrigez la classe ou ajoutez plus d'exemples d'entraînement.",
       modelSource: "custom",
     };
   }
@@ -453,12 +519,13 @@ const classifyWasteLabel = (label, confidence) => {
     confidence,
     detectedObject: rule.label,
     rawDetectedObject: label,
-    recyclable: rule.recyclable && confidence >= 55,
-    detectionStatus: confidence >= 55 ? "custom_model_recognized" : "custom_model_low_confidence",
+    recyclable: rule.recyclable && isReliable,
+    sortingClass: inferSortingClass(normalizeLabelKey(label), rule.material, rule.recyclable),
+    detectionStatus: isReliable ? "custom_model_recognized" : "custom_model_low_confidence",
     reason:
-      confidence >= 55
+      isReliable
         ? rule.reason
-        : "Le modèle personnalisé hésite. Reprenez une photo plus nette avant de trier.",
+        : "Le modèle personnalisé hésite. Corrigez la classe ou ajoutez plus d'exemples d'entraînement.",
     modelSource: "custom",
   };
 };
@@ -474,14 +541,7 @@ const detectWithWasteClassifier = async (imageElement) => {
 
   if (!Array.isArray(labels) || labels.length === 0) return null;
 
-  const input = tf.tidy(() =>
-    tf.browser
-      .fromPixels(imageElement)
-      .resizeBilinear([WASTE_CLASSIFIER_INPUT_SIZE, WASTE_CLASSIFIER_INPUT_SIZE])
-      .toFloat()
-      .div(255)
-      .expandDims(0)
-  );
+  const input = preprocessWasteClassifierImage(imageElement);
 
   try {
     const output = classifier.predict(input);
@@ -498,20 +558,32 @@ const detectWithWasteClassifier = async (imageElement) => {
 
     wasteClassifierLabelMismatch = false;
 
-    const best = scores.reduce(
-      (acc, score, index) => (score > acc.score ? { score, index } : acc),
-      { score: 0, index: 0 }
-    );
-    const label = labels[best.index] || `Classe ${best.index + 1}`;
+    const ranked = scores
+      .map((score, index) => ({ score, index, label: labels[index] }))
+      .sort((a, b) => b.score - a.score);
+
+    const best = ranked[0] || { score: 0, index: 0, label: labels[0] };
+    const label = best.label || `Classe ${best.index + 1}`;
     const confidence = Math.round(best.score * 100);
-    const classification = classifyWasteLabel(label, confidence);
+    const secondConfidence = Math.round((ranked[1]?.score || 0) * 100);
+    const margin = confidence - secondConfidence;
+    const classification = classifyWasteLabel(label, confidence, margin);
     const size = getImageSize(imageElement);
+    const topPredictions = ranked.slice(0, 3).map(({ label: rawLabel, score }) => {
+      const configuredClass = getConfiguredWasteClass(rawLabel);
+      return {
+        label: rawLabel,
+        displayLabel: configuredClass?.label || rawLabel,
+        confidence: Math.round(score * 100),
+      };
+    });
 
     return {
       class: classification.detectedObject,
       score: best.score,
       bbox: [0, 0, size.width, size.height],
       customClassification: classification,
+      topPredictions,
     };
   } finally {
     input.dispose();
@@ -550,6 +622,60 @@ const buildFallbackClassification = (objectName, confidence) => {
         ? "Classification estimée à partir du nom détecté par l'IA."
         : "Objet reconnu mais non associé à une filière recyclable fiable.",
   };
+};
+
+export const ELECTRONICS_MOBILENET_CLASSES = new Set([
+  "cell phone",
+  "remote",
+  "keyboard",
+  "mouse",
+  "laptop",
+  "tv",
+  "microwave",
+  "oven",
+  "toaster",
+  "refrigerator",
+]);
+
+const isElectronicClassName = (className) =>
+  /cell phone|cellular telephone|remote|keyboard|mouse|laptop|notebook|computer|monitor|television|tv|microwave|oven|toaster|refrigerator/i.test(
+    className || ""
+  );
+
+/** Prefer electronics when MobileNet sees phone/remote/etc. even if another object scores higher. */
+export const buildMobileNetSuggestionFromPredictions = (predictions) => {
+  if (!predictions?.length) return null;
+
+  const sorted = [...predictions].sort((a, b) => b.score - a.score);
+  const topLabels = sorted
+    .slice(0, 4)
+    .map((p) => `${p.className || p.class} ${Math.round((p.score || 0) * 100)}%`)
+    .join(" · ");
+
+  const electronicsHit = sorted.find((p) => isElectronicClassName(p.className || p.class));
+
+  if (electronicsHit && electronicsHit.score >= 0.18) {
+    const objectName = String(electronicsHit.class).toLowerCase();
+    const classification = MATERIAL_CLASSIFICATION[objectName];
+    const confidence = Math.round((electronicsHit.score || 0) * 100);
+    return {
+      material: "recyclage_specialise",
+      confidence,
+      detectedObject: classification?.label || electronicsHit.class,
+      rawDetectedObject: electronicsHit.class,
+      recyclable: true,
+      detectionStatus: "mobilenet_specialized_recycling",
+      reason:
+        classification?.reason ||
+        "Appareil électronique reconnu. Déposez-le en point de collecte spécialisé.",
+      modelSource: "tensorflow-mobilenet",
+      allMobileNetTop: topLabels,
+    };
+  }
+
+  const base = suggestMaterial(predictions);
+  if (!base) return null;
+  return { ...base, allMobileNetTop: topLabels };
 };
 
 const LOW_CONFIDENCE_RECYCLABLE_CLASSES = new Set([
@@ -691,18 +817,18 @@ export const detectFromVideoStream = async (videoElement) => {
  */
 export const getModelInfo = () => {
   return {
-    name: wasteClassifierModel ? "EcoScan Waste Classifier" : "COCO-SSD",
-    version: wasteClassifierModel ? "custom-tfjs" : "2.2.3",
+    name: wasteClassifierModel ? "EcoScan Waste Classifier" : "MobileNet",
+    version: wasteClassifierModel ? "custom-tfjs-mobilenet" : "2.1.1",
     framework: "TensorFlow.js",
     isLoaded: wasteClassifierModel !== null || model !== null,
     customModelAvailable: wasteClassifierModel !== null,
     customModelPath: WASTE_CLASSIFIER_BASE_URL,
     description: wasteClassifierModel
       ? "Classification personnalisée des déchets"
-      : "Détection d'objets générique avec fallback COCO-SSD",
+      : "Classification d'image générique avec fallback MobileNet",
     capabilities: [
-      "Support modèle Teachable Machine / TensorFlow.js",
-      "Fallback COCO-SSD si le modèle personnalisé est absent",
+      "Support modèle TensorFlow.js MobileNet personnalisé",
+      "Fallback MobileNet si le modèle personnalisé est absent",
       "Support des images et vidéos",
       "Exécution côté client",
     ],
@@ -714,8 +840,19 @@ export const getWasteClassifierStatus = () => ({
   customModelUnavailable: wasteClassifierUnavailable,
   labelMismatch: wasteClassifierLabelMismatch,
   customModelPath: WASTE_CLASSIFIER_BASE_URL,
-  fallbackModel: "COCO-SSD",
+  fallbackModel: "MobileNet",
 });
+
+/** Classification matière via modèle TensorFlow.js MobileNet (navigateur). */
+export const predictWasteMaterial = async (imageElement) => {
+  const prediction = await detectWithWasteClassifier(imageElement);
+  if (!prediction?.customClassification) return null;
+
+  return {
+    ...prediction.customClassification,
+    topPredictions: prediction.topPredictions || [],
+  };
+};
 
 /**
  * Libérer la mémoire du modèle

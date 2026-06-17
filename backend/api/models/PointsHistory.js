@@ -23,6 +23,17 @@ const pointsHistorySchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
+    confidence: {
+      type: Number,
+      default: null,
+      min: 0,
+      max: 100,
+    },
+    bonus: {
+      type: String,
+      default: "",
+      trim: true,
+    },
     reason: {
       type: String,
       enum: ["scan", "achievement", "bonus", "manual_adjustment", "deduction"],

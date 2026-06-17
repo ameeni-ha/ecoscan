@@ -7,6 +7,8 @@ const ALLOWED_CENTER_TYPES = [
 ];
 
 const ALLOWED_MATERIALS = [
+  "recyclable",
+  "recyclage_specialise",
   "plastique",
   "verre",
   "papier_carton",
@@ -17,6 +19,8 @@ const ALLOWED_MATERIALS = [
 ];
 
 const SCAN_MATERIAL_TO_CENTER_TAGS = {
+  recyclable: [],
+  recyclage_specialise: ["electronic", "mixed"],
   plastique: ["plastic"],
   verre: ["glass"],
   papier_carton: ["paper"],
@@ -27,6 +31,18 @@ const SCAN_MATERIAL_TO_CENTER_TAGS = {
 };
 
 const MATERIAL_DATABASE = {
+  recyclable: {
+    recyclable: true,
+    points: 3,
+    instructions:
+      "Objet classé comme recyclable. Vérifiez la matière exacte et déposez-le dans le bac ou centre adapté selon les consignes locales.",
+  },
+  recyclage_specialise: {
+    recyclable: true,
+    points: 8,
+    instructions:
+      "Objet à orienter vers une filière spécialisée. Ne le jetez pas avec les déchets ménagers; cherchez un point de dépôt adapté.",
+  },
   plastique: {
     recyclable: true,
     points: 5,
@@ -77,37 +93,27 @@ const OVERPASS_ENDPOINTS = [
   "https://overpass.nchc.org.tw/api/interpreter",
 ];
 
-// Must match train_waste_model.py CLASS_NAMES
+// Must match Teachable Machine metadata labels and train_waste_model.py CLASS_NAMES
 const DATASET_CLASS_NAMES = [
-  "battery",
-  "plastique",
-  "bouteille_plastique",
-  "cardboard",
-  "clothes",
-  "verre",
-  "papier_carton",
-  "metal",
-  "electronique",
-  "organique",
-  "non_recyclable",
-  "shoes",
-  "trash",
+  "plastique_recyclable",
+  "verre_recyclable",
+  "papier_carton_recyclable",
+  "metal_recyclable",
+  "organique_recyclable",
+  "electronique_recyclage_specialise",
+  "batterie_recyclage_specialise",
+  "autre_non_recyclable",
 ];
 
 const DATASET_CLASS_LABELS = {
-  battery: "Pile / batterie",
-  plastique: "Plastique",
-  bouteille_plastique: "Bouteille plastique",
-  cardboard: "Carton",
-  clothes: "Vêtements",
-  verre: "Verre",
-  papier_carton: "Papier / carton",
-  metal: "Métal",
-  electronique: "Électronique",
-  organique: "Organique",
-  non_recyclable: "Non recyclable",
-  shoes: "Chaussures",
-  trash: "Déchet / ordures",
+  plastique_recyclable: "Plastique - recyclable",
+  verre_recyclable: "Verre - recyclable",
+  papier_carton_recyclable: "Papier / carton - recyclable",
+  metal_recyclable: "Métal - recyclable",
+  organique_recyclable: "Organique - recyclable",
+  electronique_recyclage_specialise: "Électronique - recyclage spécialisé",
+  batterie_recyclage_specialise: "Pile / batterie - recyclage spécialisé",
+  autre_non_recyclable: "Autre - non recyclable",
 };
 
 module.exports = {

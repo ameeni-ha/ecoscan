@@ -9,6 +9,8 @@ import {
 } from "./utils/tensorflowUtils";
 
 const MATERIAL_OPTIONS = [
+  { value: "recyclable", label: "Recyclable" },
+  { value: "recyclage_specialise", label: "Recyclage spécialisé" },
   { value: "plastique", label: "Plastique" },
   { value: "verre", label: "Verre" },
   { value: "papier_carton", label: "Papier / Carton" },
@@ -22,7 +24,7 @@ export default function Scan() {
   const { token } = useAuth();
 
   const [label, setLabel] = useState("");
-  const [material, setMaterial] = useState("plastique");
+  const [material, setMaterial] = useState("recyclable");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [history, setHistory] = useState([]);

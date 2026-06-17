@@ -7,6 +7,8 @@ const TUNISIA_CENTER = [34.0, 9.5];
 const TUNISIA_ZOOM = 7;
 
 const MATERIAL_LABELS = {
+  recyclable: "Recyclable",
+  recyclage_specialise: "Recyclage spécialisé",
   plastic: "Plastique",
   plastique: "Plastique",
   paper: "Papier / carton",
@@ -18,6 +20,7 @@ const MATERIAL_LABELS = {
   electronic: "Électronique",
   electronique: "Électronique",
   organic: "Organique",
+  textile: "Textile",
   mixed: "Mixte",
 };
 

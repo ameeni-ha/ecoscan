@@ -1,6 +1,6 @@
 # EcoScan Waste Classifier
 
-Place your Teachable Machine / TensorFlow.js image model export in this folder.
+Place your TensorFlow.js MobileNet image classification model export in this folder.
 
 Required files:
 
@@ -11,19 +11,20 @@ Required files:
 
 Recommended class names:
 
-- `battery`
-- `plastique`
-- `bouteille_plastique`
-- `cardboard`
-- `clothes`
-- `verre`
-- `papier_carton` or `carton`
-- `metal`
-- `electronique`
-- `organique`
+- `plastique_recyclable`
+- `verre_recyclable`
+- `papier_carton_recyclable`
+- `metal_recyclable`
+- `organique_recyclable`
+- `electronique_recyclage_specialise`
+- `batterie_recyclage_specialise`
+- `autre_non_recyclable`
+
+Legacy generic classes are still supported, but they cannot identify the exact material:
+
+- `recyclable`
 - `non_recyclable`
-- `shoes`
-- `trash`
+- `Recyclage_spécialisé`
 
 For best precision, train each class with many real photos:
 
@@ -37,4 +38,4 @@ The app loads this model automatically from:
 
 `/models/waste-classifier/model.json`
 
-If the model is missing, EcoScan falls back to COCO-SSD.
+If the model is missing, EcoScan falls back to MobileNet.

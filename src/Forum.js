@@ -157,7 +157,8 @@ export default function Forum() {
             <div style={{ marginTop: 16, display: "grid", gap: 14 }}>
               {posts.map((post) => {
                 const atLabel = accountTypeLabel(post.author?.accountType);
-                const isOwner = user && post.author?.id === user._id;
+                const currentUserId = user?.id || user?._id;
+                const isOwner = currentUserId && post.author?.id === currentUserId;
                 return (
                   <div
                     key={post.id}

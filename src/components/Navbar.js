@@ -1,13 +1,42 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import "../App.css";
+import { apiRequest } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { canUseScan } from "../utils/permissions";
 
 const Navbar = () => {
   const [open, setOpen] = useState(false);
-  const { isAuthenticated, user, logout } = useAuth();
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const { isAuthenticated, user, token, logout } = useAuth();
   const isAdmin = user?.role === "admin";
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) {
+      setUnreadNotifications(0);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadUnreadCount = async () => {
+      try {
+        const data = await apiRequest("/notifications/unread/count", { token });
+        if (!cancelled) setUnreadNotifications(data.unreadCount || 0);
+      } catch {
+        if (!cancelled) setUnreadNotifications(0);
+      }
+    };
+
+    loadUnreadCount();
+    window.addEventListener("ecoscan:notifications-updated", loadUnreadCount);
+    const intervalId = window.setInterval(loadUnreadCount, 30000);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("ecoscan:notifications-updated", loadUnreadCount);
+      window.clearInterval(intervalId);
+    };
+  }, [isAuthenticated, token]);
 
   const handleLogout = async () => {
     setOpen(false);
@@ -98,6 +127,20 @@ const Navbar = () => {
               onClick={() => setOpen(false)}
             >
               Rendez-vous
+            </NavLink>
+          )}
+          {isAuthenticated && (
+            <NavLink
+              to="/notifications"
+              className={({ isActive }) => "nav-link notification-nav-link" + (isActive ? " active" : "")}
+              onClick={() => setOpen(false)}
+              aria-label={`Notifications, ${unreadNotifications} non consultée(s)`}
+              title="Notifications"
+            >
+              <span className="notification-icon" aria-hidden="true">🔔</span>
+              {unreadNotifications > 0 ? (
+                <span className="notification-count">{unreadNotifications > 99 ? "99+" : unreadNotifications}</span>
+              ) : null}
             </NavLink>
           )}
           {isAuthenticated && isAdmin && (

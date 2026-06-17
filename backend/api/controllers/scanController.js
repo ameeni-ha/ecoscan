@@ -15,6 +15,8 @@ const {
 const PYTHON_AI_URL = process.env.PYTHON_AI_URL || "http://127.0.0.1:5001";
 const DATASET_ROOT = path.join(__dirname, "../../../waste_dataset");
 
+const safeText = (value, maxLength) => String(value || "").trim().slice(0, maxLength);
+
 class ScanController {
   // Predict material with the local Python/Keras service
   static async predictScan(req, res) {
@@ -120,11 +122,12 @@ class ScanController {
         });
       }
 
-      const label = String(req.body?.label || "").trim();
+      const label = safeText(req.body?.label, 140);
       const material = String(req.body?.material || "").trim();
-      const detectedObject = String(req.body?.detectedObject || "").trim();
-      const detectionStatus = String(req.body?.detectionStatus || "").trim();
-      const detectionReason = String(req.body?.detectionReason || "").trim();
+      const detectedObject = safeText(req.body?.detectedObject, 140);
+      const detectionStatus = safeText(req.body?.detectionStatus, 60);
+      const detectionReason = safeText(req.body?.detectionReason, 500);
+      const sortingClass = safeText(req.body?.sortingClass, 40);
       const confidence = Math.max(
         0,
         Math.min(100, Number.parseInt(req.body?.confidence || "0", 10) || 0)
@@ -170,6 +173,7 @@ class ScanController {
         detectedObject,
         confidence,
         detectionStatus,
+        sortingClass,
         detectionReason,
       });
 
@@ -206,6 +210,7 @@ class ScanController {
           detectedObject: scan.detectedObject,
           confidence: scan.confidence,
           detectionStatus: scan.detectionStatus,
+          sortingClass: scan.sortingClass,
           detectionReason: scan.detectionReason,
           createdAt: scan.createdAt,
         },
@@ -242,6 +247,7 @@ class ScanController {
           detectedObject: scan.detectedObject,
           confidence: scan.confidence,
           detectionStatus: scan.detectionStatus,
+          sortingClass: scan.sortingClass,
           detectionReason: scan.detectionReason,
           createdAt: scan.createdAt,
         },
@@ -271,6 +277,7 @@ class ScanController {
           detectedObject: scan.detectedObject,
           confidence: scan.confidence,
           detectionStatus: scan.detectionStatus,
+          sortingClass: scan.sortingClass,
           detectionReason: scan.detectionReason,
           createdAt: scan.createdAt,
         })),

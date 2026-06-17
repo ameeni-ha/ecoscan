@@ -15,7 +15,12 @@ const createAdminRoutes = () => {
   router.delete("/scans/:id", (req, res) => AdminController.deleteScan(req, res));
 
   router.get("/centers", (req, res) => AdminController.centers(req, res));
+  router.patch("/centers/:id", (req, res) => AdminController.updateCenter(req, res));
   router.delete("/centers/:id", (req, res) => AdminController.deleteCenter(req, res));
+
+  router.get("/meetings", (req, res) => AdminController.meetings(req, res));
+  router.patch("/meetings/:id", (req, res) => AdminController.updateMeeting(req, res));
+  router.delete("/meetings/:id", (req, res) => AdminController.deleteMeeting(req, res));
 
   router.get("/posts", (req, res) => AdminController.posts(req, res));
   router.patch("/posts/:id/status", (req, res) => AdminController.updatePostStatus(req, res));

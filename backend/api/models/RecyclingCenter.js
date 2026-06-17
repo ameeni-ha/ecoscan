@@ -3,6 +3,12 @@ const bcrypt = require("bcryptjs");
 
 const recyclingCenterSchema = new mongoose.Schema(
   {
+    cityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "City",
+      default: null,
+      index: true,
+    },
     firstName: {
       type: String,
       required: true,
@@ -117,6 +123,19 @@ const recyclingCenterSchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    externalSource: {
+      type: String,
+      enum: ["", "anged", "osm"],
+      default: "",
+      trim: true,
+      index: true,
+    },
+    externalSourceId: {
+      type: String,
+      default: "",
+      trim: true,
+      index: true,
+    },
     isVerified: {
       type: Boolean,
       default: false,
@@ -185,6 +204,17 @@ recyclingCenterSchema.methods.addReview = function addReview(rating) {
   this.totalReviews += 1;
   return this.save();
 };
+
+recyclingCenterSchema.index(
+  { externalSource: 1, externalSourceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      externalSource: { $in: ["anged", "osm"] },
+      externalSourceId: { $type: "string", $ne: "" },
+    },
+  }
+);
 
 module.exports =
   mongoose.models.RecyclingCenter ||

@@ -3,9 +3,13 @@ const Scan = require("../models/Scan");
 const Post = require("../models/Post");
 const Comment = require("../models/Comment");
 const RecyclingCenter = require("../models/RecyclingCenter");
+const MeetingRequest = require("../models/MeetingRequest");
 const { MATERIAL_DATABASE, ALLOWED_MATERIALS } = require("../utils/constants");
 const { sanitizeUser } = require("../utils/helpers");
 const PointsService = require("../utils/PointsService");
+const NotificationService = require("../utils/NotificationService");
+
+const CENTER_MATERIAL_TAGS = ["plastic", "paper", "glass", "metal", "electronic", "textile", "organic", "mixed"];
 
 const ensureAdmin = (req, res) => {
   if (req.user?.role !== "admin") {
@@ -30,6 +34,7 @@ class AdminController {
         hiddenPosts,
         totalComments,
         totalScans,
+        totalMeetings,
         pointsResult,
       ] = await Promise.all([
         User.countDocuments(),
@@ -38,6 +43,7 @@ class AdminController {
         Post.countDocuments({ status: "hidden" }),
         Comment.countDocuments(),
         Scan.countDocuments(),
+        MeetingRequest.countDocuments(),
         User.aggregate([{ $group: { _id: null, total: { $sum: "$points" } } }]),
       ]);
 
@@ -49,6 +55,7 @@ class AdminController {
           hiddenPosts,
           totalComments,
           totalScans,
+          totalMeetings,
           totalPoints: pointsResult[0]?.total || 0,
         },
       });
@@ -118,14 +125,28 @@ class AdminController {
         return res.status(400).json({ message: "Vous ne pouvez pas supprimer un administrateur" });
       }
 
+      const scanCount = await Scan.countDocuments({ userId: user._id });
+      if (scanCount > 0) {
+        return res.status(400).json({
+          message: `Impossible de supprimer cet utilisateur : il possède ${scanCount} scan${scanCount > 1 ? "s" : ""}. Supprimez d'abord ses scans depuis l'administration.`,
+          scanCount,
+        });
+      }
+
+      const meetingDeleteResult = await MeetingRequest.deleteMany({ requesterId: user._id });
       await Promise.all([
-        Scan.deleteMany({ userId: user._id }),
         Post.deleteMany({ authorId: user._id }),
         Comment.deleteMany({ authorId: user._id }),
       ]);
       await User.deleteOne({ _id: user._id });
 
-      return res.json({ message: "Utilisateur supprimé" });
+      return res.json({
+        message:
+          meetingDeleteResult.deletedCount > 0
+            ? `Utilisateur supprimé. ${meetingDeleteResult.deletedCount} demande${meetingDeleteResult.deletedCount > 1 ? "s" : ""} de rendez-vous supprimée${meetingDeleteResult.deletedCount > 1 ? "s" : ""} des centres.`
+            : "Utilisateur supprimé",
+        deletedMeetings: meetingDeleteResult.deletedCount || 0,
+      });
     } catch (error) {
       return res.status(500).json({ message: error.message || "Erreur serveur" });
     }
@@ -149,6 +170,7 @@ class AdminController {
             id: scan._id.toString(),
             label: scan.label,
             material: scan.material,
+            sortingClass: scan.sortingClass || "",
             recyclable: scan.recyclable,
             points: scan.points,
             photoUrl: scan.photoUrl,
@@ -190,12 +212,27 @@ class AdminController {
       const nextRecyclable = material !== "autre" && materialData.recyclable;
       const nextPoints = nextRecyclable ? materialData.points : 0;
 
+      if (req.body?.label !== undefined) {
+        scan.label = String(req.body.label).trim().slice(0, 140) || scan.label;
+      }
       scan.material = material;
       scan.recyclable = nextRecyclable;
       scan.points = nextPoints;
       scan.instructions = materialData.instructions;
+      if (req.body?.sortingClass !== undefined) {
+        const sortingClass = String(req.body.sortingClass || "").trim();
+        if (!["", "recyclable", "non_recyclable", "recyclage_specialise"].includes(sortingClass)) {
+          return res.status(400).json({ message: "Classe de tri invalide" });
+        }
+        scan.sortingClass = sortingClass;
+      }
+      if (req.body?.detectionReason !== undefined) {
+        scan.detectionReason = String(req.body.detectionReason || "").trim().slice(0, 500);
+      }
       scan.detectionStatus = "admin_corrected";
-      scan.detectionReason = "Matière corrigée par un administrateur.";
+      if (!scan.detectionReason) {
+        scan.detectionReason = "Matière corrigée par un administrateur.";
+      }
       await scan.save();
 
       const delta = nextPoints - oldPoints;
@@ -346,13 +383,70 @@ class AdminController {
         centers: centers.map((center) => ({
           id: center._id.toString(),
           name: center.centerName || center.name || "Centre",
+          centerName: center.centerName || center.name || "Centre",
           manager: center.managerName || "",
+          managerName: center.managerName || "",
           city: center.city || "",
+          address: center.address || "",
+          phone: center.phone || "",
+          email: center.email || "",
+          openingHours: center.openingHours || "",
+          capacityPerDayKg: center.capacityPerDayKg || 0,
           materials: center.materialsAccepted || [],
           verified: Boolean(center.isVerified),
           rating: center.rating || 0,
         })),
       });
+    } catch (error) {
+      return res.status(500).json({ message: error.message || "Erreur serveur" });
+    }
+  }
+
+  static async updateCenter(req, res) {
+    if (!ensureAdmin(req, res)) return;
+
+    try {
+      const updates = {};
+      const {
+        centerName,
+        managerName,
+        city,
+        address,
+        phone,
+        openingHours,
+        materialsAccepted,
+        capacityPerDayKg,
+        isVerified,
+      } = req.body || {};
+
+      if (centerName !== undefined) updates.centerName = String(centerName).trim();
+      if (managerName !== undefined) updates.managerName = String(managerName).trim();
+      if (city !== undefined) updates.city = String(city).trim();
+      if (address !== undefined) updates.address = String(address).trim();
+      if (phone !== undefined) updates.phone = String(phone).trim();
+      if (openingHours !== undefined) updates.openingHours = String(openingHours).trim();
+      if (capacityPerDayKg !== undefined) updates.capacityPerDayKg = Number(capacityPerDayKg) || 0;
+      if (isVerified !== undefined) updates.isVerified = Boolean(isVerified);
+      if (materialsAccepted !== undefined) {
+        if (!Array.isArray(materialsAccepted)) {
+          return res.status(400).json({ message: "Matériaux invalides" });
+        }
+
+        const nextMaterials = [...new Set(materialsAccepted.map((item) => String(item).trim()).filter(Boolean))];
+        const invalidMaterials = nextMaterials.filter((item) => !CENTER_MATERIAL_TAGS.includes(item));
+        if (invalidMaterials.length > 0) {
+          return res.status(400).json({ message: `Matériaux invalides : ${invalidMaterials.join(", ")}` });
+        }
+        updates.materialsAccepted = nextMaterials;
+      }
+
+      const center = await RecyclingCenter.findByIdAndUpdate(req.params.id, updates, {
+        new: true,
+        runValidators: true,
+      });
+
+      if (!center) return res.status(404).json({ message: "Centre introuvable" });
+      return res.json({ message: "Centre modifié", centerId: center._id.toString() });
     } catch (error) {
       return res.status(500).json({ message: error.message || "Erreur serveur" });
     }
@@ -365,6 +459,111 @@ class AdminController {
       const center = await RecyclingCenter.findByIdAndDelete(req.params.id);
       if (!center) return res.status(404).json({ message: "Centre introuvable" });
       return res.json({ message: "Centre supprimé" });
+    } catch (error) {
+      return res.status(500).json({ message: error.message || "Erreur serveur" });
+    }
+  }
+
+  static async meetings(req, res) {
+    if (!ensureAdmin(req, res)) return;
+
+    try {
+      const meetings = await MeetingRequest.find()
+        .sort({ createdAt: -1 })
+        .limit(500)
+        .populate("requesterId", "firstName lastName email")
+        .populate("centerUserId", "centerName city email")
+        .lean();
+
+      return res.json({
+        meetings: meetings.map((meeting) => ({
+          id: meeting._id.toString(),
+          status: meeting.status,
+          material: meeting.material,
+          preferredDate: meeting.preferredDate,
+          createdAt: meeting.createdAt,
+          message: meeting.message,
+          rejectionReason: meeting.rejectionReason || "",
+          notes: meeting.notes || "",
+          requester: meeting.requesterId
+            ? {
+                id: meeting.requesterId._id.toString(),
+                name: formatUserName(meeting.requesterId),
+                email: meeting.requesterId.email,
+              }
+            : null,
+          center: meeting.centerUserId
+            ? {
+                id: meeting.centerUserId._id.toString(),
+                name: meeting.centerUserId.centerName,
+                city: meeting.centerUserId.city,
+                email: meeting.centerUserId.email,
+              }
+            : null,
+        })),
+      });
+    } catch (error) {
+      return res.status(500).json({ message: error.message || "Erreur serveur" });
+    }
+  }
+
+  static async updateMeeting(req, res) {
+    if (!ensureAdmin(req, res)) return;
+
+    try {
+      const meeting = await MeetingRequest.findById(req.params.id);
+      if (!meeting) return res.status(404).json({ message: "Rendez-vous introuvable" });
+
+      const { status, material, message, preferredDate, rejectionReason, notes } = req.body || {};
+
+      if (status !== undefined) {
+        if (!["pending", "accepted", "rejected", "cancelled"].includes(status)) {
+          return res.status(400).json({ message: "Statut de rendez-vous invalide" });
+        }
+        meeting.status = status;
+      }
+      if (material !== undefined) meeting.material = String(material || "").trim();
+      if (message !== undefined) meeting.message = String(message || "").trim().slice(0, 2000);
+      if (rejectionReason !== undefined) {
+        meeting.rejectionReason = String(rejectionReason || "").trim().slice(0, 500);
+      }
+      if (notes !== undefined) meeting.notes = String(notes || "").trim();
+      if (preferredDate !== undefined) {
+        meeting.preferredDate = preferredDate ? new Date(preferredDate) : null;
+        if (meeting.preferredDate && Number.isNaN(meeting.preferredDate.getTime())) {
+          return res.status(400).json({ message: "Date souhaitée invalide" });
+        }
+      }
+
+      await meeting.save();
+      return res.json({ message: "Rendez-vous modifié", meetingId: meeting._id.toString() });
+    } catch (error) {
+      return res.status(500).json({ message: error.message || "Erreur serveur" });
+    }
+  }
+
+  static async deleteMeeting(req, res) {
+    if (!ensureAdmin(req, res)) return;
+
+    try {
+      const reason = String(req.body?.reason || "").trim().slice(0, 500);
+      const meeting = await MeetingRequest.findById(req.params.id).populate("centerUserId", "centerName");
+
+      if (!meeting) return res.status(404).json({ message: "Rendez-vous introuvable" });
+      if (meeting.status !== "pending") {
+        return res.status(400).json({
+          message: "Seules les demandes en cours de traitement peuvent être supprimées.",
+        });
+      }
+
+      await NotificationService.notifyMeetingDeletedByAdmin(
+        meeting.requesterId,
+        meeting.centerUserId?.centerName || "ce centre",
+        reason
+      );
+      await MeetingRequest.deleteOne({ _id: meeting._id });
+
+      return res.json({ message: "Rendez-vous supprimé et collecteur notifié" });
     } catch (error) {
       return res.status(500).json({ message: error.message || "Erreur serveur" });
     }

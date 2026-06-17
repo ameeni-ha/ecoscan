@@ -4,6 +4,14 @@ import { apiRequest } from "./api/client";
 import { useAuth } from "./context/AuthContext";
 import { formatDateFr } from "./utils/formatDateFr";
 import { canUseScan } from "./utils/permissions";
+import {
+  buildMobileNetSuggestionFromPredictions,
+  detectObjectsWithMobileNetOnly,
+  ELECTRONICS_MOBILENET_CLASSES,
+  getWasteClassifierStatus,
+  loadModel as loadMobileNetModel,
+  predictWasteMaterial,
+} from "./utils/tensorflowUtils";
 
 const dataUrlToFile = async (dataUrl, filename = "scan.jpg") => {
   const response = await fetch(dataUrl);
@@ -12,6 +20,8 @@ const dataUrlToFile = async (dataUrl, filename = "scan.jpg") => {
 };
 
 const MATERIAL_OPTIONS = [
+  { value: "recyclable", label: "Recyclable" },
+  { value: "recyclage_specialise", label: "Recyclage spécialisé" },
   { value: "plastique", label: "Plastique" },
   { value: "verre", label: "Verre" },
   { value: "papier_carton", label: "Papier / Carton" },
@@ -22,32 +32,195 @@ const MATERIAL_OPTIONS = [
 ];
 
 const DATASET_CLASS_OPTIONS = [
-  { value: "battery", label: "Pile / batterie", material: "electronique", recyclable: true },
-  { value: "plastique", label: "Plastique", material: "plastique", recyclable: true },
-  { value: "bouteille_plastique", label: "Bouteille plastique", material: "plastique", recyclable: true },
-  { value: "cardboard", label: "Carton", material: "papier_carton", recyclable: true },
-  { value: "clothes", label: "Vêtements", material: "autre", recyclable: false },
-  { value: "verre", label: "Verre", material: "verre", recyclable: true },
-  { value: "papier_carton", label: "Papier / carton", material: "papier_carton", recyclable: true },
-  { value: "metal", label: "Métal", material: "metal", recyclable: true },
-  { value: "electronique", label: "Électronique", material: "electronique", recyclable: true },
-  { value: "organique", label: "Organique", material: "organique", recyclable: true },
-  { value: "non_recyclable", label: "Non recyclable", material: "autre", recyclable: false },
-  { value: "shoes", label: "Chaussures", material: "autre", recyclable: false },
-  { value: "trash", label: "Déchet / ordures", material: "autre", recyclable: false },
+  { value: "plastique_recyclable", label: "Plastique - recyclable", material: "plastique", recyclable: true, sortingClass: "recyclable" },
+  { value: "verre_recyclable", label: "Verre - recyclable", material: "verre", recyclable: true, sortingClass: "recyclable" },
+  { value: "papier_carton_recyclable", label: "Papier / carton - recyclable", material: "papier_carton", recyclable: true, sortingClass: "recyclable" },
+  { value: "metal_recyclable", label: "Métal - recyclable", material: "metal", recyclable: true, sortingClass: "recyclable" },
+  { value: "organique_recyclable", label: "Organique - recyclable", material: "organique", recyclable: true, sortingClass: "recyclable" },
+  {
+    value: "electronique_recyclage_specialise",
+    label: "Électronique - recyclage spécialisé",
+    material: "electronique",
+    recyclable: true,
+    sortingClass: "recyclage_specialise",
+  },
+  {
+    value: "batterie_recyclage_specialise",
+    label: "Pile / batterie - recyclage spécialisé",
+    material: "electronique",
+    recyclable: true,
+    sortingClass: "recyclage_specialise",
+  },
+  { value: "autre_non_recyclable", label: "Autre - non recyclable", material: "autre", recyclable: false, sortingClass: "non_recyclable" },
 ];
 
 const MATERIAL_TO_DATASET_CLASS = {
-  plastique: "plastique",
-  verre: "verre",
-  papier_carton: "papier_carton",
-  metal: "metal",
-  electronique: "electronique",
-  organique: "organique",
-  autre: "trash",
+  recyclable: "plastique_recyclable",
+  recyclage_specialise: "electronique_recyclage_specialise",
+  plastique: "plastique_recyclable",
+  verre: "verre_recyclable",
+  papier_carton: "papier_carton_recyclable",
+  metal: "metal_recyclable",
+  electronique: "electronique_recyclage_specialise",
+  organique: "organique_recyclable",
+  autre: "autre_non_recyclable",
+};
+
+const limitText = (value, maxLength) => String(value || "").trim().slice(0, maxLength);
+
+const UNCERTAIN_KERAS_STATUS = /ambiguous|low_confidence|unknown/i;
+const MIN_RELIABLE_CONFIDENCE = 60;
+const PYTHON_MOBILENET_FIRST_MODE = true;
+
+const loadImageElement = (src) =>
+  new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Impossible de charger l'image."));
+    img.src = src;
+  });
+
+const withTimeout = (promise, timeoutMs, message) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    }),
+  ]);
+
+const mergeHybridPrediction = (kerasPrediction, mobileNetSuggestion) => {
+  const tmConf = kerasPrediction?.confidence || 0;
+  const tmStatus = kerasPrediction?.detectionStatus || "";
+  const tmIsReliable =
+    tmConf >= MIN_RELIABLE_CONFIDENCE && !UNCERTAIN_KERAS_STATUS.test(tmStatus);
+
+  if (kerasPrediction && tmIsReliable) {
+    const isPythonModel = String(kerasPrediction.modelSource || "").includes("python");
+    const primaryModelName = isPythonModel ? "MobileNetV2 Python" : "Teachable Machine";
+    const material = kerasPrediction.material || "autre";
+    const recyclable = Boolean(kerasPrediction.recyclable);
+    const sortingClass =
+      kerasPrediction.sortingClass ||
+      (material === "recyclage_specialise"
+        ? "recyclage_specialise"
+        : recyclable
+        ? "recyclable"
+        : "non_recyclable");
+
+    return {
+      ...kerasPrediction,
+      material,
+      recyclable,
+      sortingClass,
+      reason: mobileNetSuggestion?.detectedObject
+        ? `${primaryModelName} prioritaire : ${
+            kerasPrediction.reason || "classification estimée par le modèle personnalisé."
+          } MobileNet détecte aussi : ${mobileNetSuggestion.detectedObject} (${Math.round(
+            mobileNetSuggestion.confidence || 0
+          )}%).`
+        : kerasPrediction.reason,
+      detectionStatus: isPythonModel ? "python_mobilenet_first" : "teachable_machine_fallback",
+      modelSource: mobileNetSuggestion
+        ? isPythonModel
+          ? "python-mobilenet-first-hybrid"
+          : "teachable-machine-fallback-hybrid"
+        : kerasPrediction.modelSource || "custom",
+      topPredictions: kerasPrediction.topPredictions || [],
+      mobileNetObject: mobileNetSuggestion?.rawDetectedObject || "",
+      allMobileNetTop: mobileNetSuggestion?.allMobileNetTop || "",
+      uncertain: false,
+    };
+  }
+
+  if (mobileNetSuggestion) {
+    const mobileNetConf = mobileNetSuggestion.confidence || 0;
+    const mobileNetMaterial = mobileNetSuggestion.material || "autre";
+    const mobileNetRaw = String(mobileNetSuggestion.rawDetectedObject || "").toLowerCase();
+    const mobileNetIsKnown =
+      mobileNetMaterial !== "autre" ||
+      mobileNetSuggestion.detectionStatus === "mobilenet_specialized_recycling" ||
+      ELECTRONICS_MOBILENET_CLASSES.has(mobileNetRaw);
+    const recyclable = Boolean(mobileNetSuggestion.recyclable);
+    const sortingClass =
+      mobileNetMaterial === "recyclage_specialise" || mobileNetMaterial === "electronique"
+        ? "recyclage_specialise"
+        : recyclable
+        ? "recyclable"
+        : "non_recyclable";
+
+    return {
+      ...(kerasPrediction || {}),
+      material: mobileNetMaterial,
+      confidence: mobileNetConf,
+      detectedObject: mobileNetSuggestion.detectedObject || "Objet détecté",
+      rawDetectedObject: mobileNetSuggestion.rawDetectedObject || "",
+      recyclable,
+      sortingClass,
+      detectionStatus: mobileNetSuggestion.detectionStatus || "mobilenet_fallback",
+      reason: `Modèle déchets incertain ou indisponible, MobileNet utilisé en secours : ${
+        mobileNetSuggestion.reason || "classification estimée par TensorFlow MobileNet."
+      }${
+        kerasPrediction?.detectedObject
+          ? ` Le modèle déchets indique aussi : ${kerasPrediction.detectedObject} (${Math.round(tmConf)}%).`
+          : ""
+      }`,
+      modelSource: kerasPrediction ? "tensorflow-mobilenet-fallback" : "tensorflow-mobilenet",
+      topPredictions: kerasPrediction?.topPredictions || [],
+      mobileNetObject: mobileNetSuggestion.rawDetectedObject || "",
+      allMobileNetTop: mobileNetSuggestion.allMobileNetTop || "",
+      uncertain: !mobileNetIsKnown && mobileNetConf < 45,
+    };
+  }
+
+  if (!kerasPrediction) return null;
+
+  const kerasConf = kerasPrediction.confidence || 0;
+  let detectedObject = kerasPrediction.detectedObject;
+  let material = kerasPrediction.material || "autre";
+  let recyclable = Boolean(kerasPrediction.recyclable);
+  let sortingClass =
+    kerasPrediction.sortingClass ||
+    (material === "recyclage_specialise"
+      ? "recyclage_specialise"
+      : recyclable
+      ? "recyclable"
+      : "non_recyclable");
+  let reason = kerasPrediction.reason || "";
+  let detectionStatus = kerasPrediction.detectionStatus || "python_keras";
+  const kerasDecisionIsReliable =
+    kerasConf >= MIN_RELIABLE_CONFIDENCE && !UNCERTAIN_KERAS_STATUS.test(detectionStatus);
+
+  const isUncertain =
+    !kerasDecisionIsReliable;
+
+  if (isUncertain) {
+    material = "autre";
+    recyclable = false;
+    sortingClass = "non_recyclable";
+    reason =
+      "Résultat incertain : le modèle hésite. Corrigez la vraie classe ou ajoutez plus d'images au dataset.";
+    detectionStatus = "hybrid_uncertain";
+  }
+
+  return {
+    ...kerasPrediction,
+    detectedObject,
+    material,
+    recyclable,
+    sortingClass,
+    reason,
+    detectionStatus,
+    modelSource: mobileNetSuggestion ? "hybrid-python-mobilenet" : kerasPrediction.modelSource || "custom",
+    topPredictions: kerasPrediction.topPredictions || [],
+    mobileNetObject: "",
+    allMobileNetTop: "",
+    uncertain: isUncertain,
+  };
 };
 
 const CENTER_MATERIAL_LABELS = {
+  recyclable: "Recyclable",
+  recyclage_specialise: "Recyclage spécialisé",
   plastic: "Plastique",
   plastique: "Plastique",
   paper: "Papier / carton",
@@ -60,6 +233,38 @@ const CENTER_MATERIAL_LABELS = {
   electronique: "Électronique",
   organic: "Organique",
   mixed: "Mixte",
+};
+
+const IMPACT_FACTORS = {
+  recyclable: { plasticKg: 0, co2Kg: 0.04 },
+  recyclage_specialise: { plasticKg: 0, co2Kg: 0.12 },
+  plastique: { plasticKg: 0.04, co2Kg: 0.08 },
+  verre: { plasticKg: 0, co2Kg: 0.03 },
+  papier_carton: { plasticKg: 0, co2Kg: 0.05 },
+  metal: { plasticKg: 0, co2Kg: 0.15 },
+  electronique: { plasticKg: 0, co2Kg: 0.2 },
+  organique: { plasticKg: 0, co2Kg: 0.02 },
+  autre: { plasticKg: 0, co2Kg: 0 },
+};
+
+const formatImpactNumber = (value, digits = 2) =>
+  Number(value || 0).toLocaleString("fr-FR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+
+const isUncertainDetection = (result) =>
+  Boolean(result?.uncertain) ||
+  UNCERTAIN_KERAS_STATUS.test(result?.detectionStatus || "") ||
+  result?.detectionStatus === "hybrid_uncertain" ||
+  (Number(result?.confidence || 0) > 0 && Number(result?.confidence || 0) < MIN_RELIABLE_CONFIDENCE);
+
+const formatRecyclingStatus = (result) => {
+  if (result?.sortingClass === "recyclage_specialise" || result?.material === "recyclage_specialise") {
+    return "♻️ Recyclage spécialisé";
+  }
+  if (result?.sortingClass === "non_recyclable") return "⚠️ Non recyclable";
+  return result?.recyclable ? "♻️ Recyclable" : "⚠️ Non recyclable";
 };
 
 const formatCenterMaterials = (materials) =>
@@ -117,6 +322,9 @@ export default function Scan() {
   const [modelLoading, setModelLoading] = useState(false);
   const [cameraLive, setCameraLive] = useState(false);
   const [cameraError, setCameraError] = useState("");
+  const [barcodeScanning, setBarcodeScanning] = useState(false);
+  const [barcodeResult, setBarcodeResult] = useState(null);
+  const [barcodeError, setBarcodeError] = useState("");
   const [correctionClass, setCorrectionClass] = useState("plastique");
   const [datasetSaving, setDatasetSaving] = useState(false);
 
@@ -129,6 +337,8 @@ export default function Scan() {
   const streamRef = useRef(null);
   const canvasRef = useRef(null);
   const detectionIntervalRef = useRef(null);
+  const zxingReaderRef = useRef(null);
+  const barcodeCandidateRef = useRef({ value: "", count: 0 });
   const liveDetectionStreakRef = useRef({ object: "", count: 0 });
   const labelRef = useRef(label);
 
@@ -150,6 +360,24 @@ export default function Scan() {
     }
   }, [detectionResult]);
 
+  useEffect(() => {
+    if (!barcodeResult) return;
+    setDetectionResult((current) => ({
+      ...(current || {}),
+      material,
+      confidence: 100,
+      detectedObject: `Code-barres ${barcodeResult.value}`,
+      rawDetectedObject: barcodeResult.value,
+      recyclable: material !== "autre",
+      detectionStatus: "barcode",
+      reason:
+        "Code-barres détecté. La matière est renseignée manuellement pour calculer la recyclabilité et les points.",
+      modelSource: "barcode-detector",
+      topPredictions: [],
+    }));
+    setLabel(`Code-barres ${barcodeResult.value}`);
+  }, [barcodeResult, material]);
+
   const materialLabel = useMemo(
     () => MATERIAL_OPTIONS.find((m) => m.value === material)?.label || material,
     [material]
@@ -159,6 +387,33 @@ export default function Scan() {
     (value) => MATERIAL_OPTIONS.find((m) => m.value === value)?.label || value || "Non précisé",
     []
   );
+
+  const impactSummary = useMemo(() => {
+    const recyclableScans = history.filter((scan) => scan.recyclable);
+
+    return recyclableScans.reduce(
+      (summary, scan) => {
+        const materialKey = scan.material || "autre";
+        const factors = IMPACT_FACTORS[materialKey] || IMPACT_FACTORS.autre;
+        const points = Number(scan.points || 0);
+
+        return {
+          recyclableCount: summary.recyclableCount + 1,
+          plasticCount: summary.plasticCount + (materialKey === "plastique" ? 1 : 0),
+          plasticKg: summary.plasticKg + factors.plasticKg,
+          co2Kg: summary.co2Kg + factors.co2Kg,
+          points: summary.points + points,
+        };
+      },
+      {
+        recyclableCount: 0,
+        plasticCount: 0,
+        plasticKg: 0,
+        co2Kg: 0,
+        points: 0,
+      }
+    );
+  }, [history]);
 
   const loadCompatibleCenters = useCallback(
     async (materialValue, coords = null) => {
@@ -298,21 +553,47 @@ export default function Scan() {
     let cancelled = false;
     setModelLoading(true);
 
+    loadMobileNetModel()
+      .then(() => {
+        if (cancelled) return;
+        const browserStatus = getWasteClassifierStatus();
+        if (browserStatus.customModelAvailable && !browserStatus.labelMismatch) {
+          setModelStatus((prev) => ({
+            ...prev,
+            browserModelAvailable: true,
+          }));
+          setError("");
+        }
+      })
+      .catch(() => {
+        // MobileNet optional: hybrid still works with browser waste model or Python
+      });
+
     fetch(`${process.env.REACT_APP_API_URL || "http://localhost:4000/api"}/ai/health`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         if (res.ok) {
-          setModelStatus({ pythonBackendAvailable: true, labels: data?.ai?.labels });
+          setModelStatus((prev) => ({
+            ...prev,
+            pythonBackendAvailable: true,
+            labels: data?.ai?.labels,
+          }));
         } else {
-          setModelStatus({ pythonBackendUnavailable: true });
-          setError(data?.message || "Service IA Python indisponible. Lancez: npm run ai");
+          setModelStatus((prev) => ({ ...prev, pythonBackendUnavailable: true }));
+          const browserOk = getWasteClassifierStatus();
+          if (!browserOk.customModelAvailable || browserOk.labelMismatch) {
+            setError(data?.message || "Service IA Python indisponible. Lancez: npm run ai");
+          }
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setModelStatus({ pythonBackendUnavailable: true });
-          setError("Impossible de joindre le service IA. Lancez npm run ai puis npm run api.");
+          setModelStatus((prev) => ({ ...prev, pythonBackendUnavailable: true }));
+          const browserOk = getWasteClassifierStatus();
+          if (!browserOk.customModelAvailable || browserOk.labelMismatch) {
+            setError("Impossible de joindre le service IA. Lancez npm run ai puis npm run api.");
+          }
         }
       })
       .finally(() => {
@@ -325,6 +606,15 @@ export default function Scan() {
   }, [allowScan]);
 
   const stopCameraStream = useCallback(() => {
+    if (zxingReaderRef.current) {
+      try {
+        zxingReaderRef.current.reset();
+      } catch {
+        // ignore reset errors
+      }
+      zxingReaderRef.current = null;
+    }
+    barcodeCandidateRef.current = { value: "", count: 0 };
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
@@ -333,6 +623,7 @@ export default function Scan() {
       videoRef.current.srcObject = null;
     }
     setCameraLive(false);
+    setBarcodeScanning(false);
   }, []);
 
   useEffect(() => {
@@ -480,6 +771,8 @@ export default function Scan() {
     setError("");
     setSuccess("");
     setCameraError("");
+    setBarcodeError("");
+    setBarcodeResult(null);
     setDetectionResult(null);
     liveDetectionStreakRef.current = { object: "", count: 0 };
     setLabel("");
@@ -506,33 +799,151 @@ export default function Scan() {
     }
 
     const file = await resolvePhotoFile();
-    const formData = new FormData();
-    formData.append("photo", file);
+    const img = await loadImageElement(photoPreview);
+    const errors = [];
 
-    const data = await apiRequest("/scans/predict", {
-      method: "POST",
-      token,
-      body: formData,
-    });
+    const runTeachableMachineClassifier = async () => {
+      try {
+        const browserPrediction = await predictWasteMaterial(img);
+        if (browserPrediction) {
+          return browserPrediction;
+        }
+      } catch (err) {
+        console.warn("Teachable Machine navigateur:", err);
+        errors.push(`Modèle navigateur: ${err?.message || "erreur inconnue"}`);
+      }
 
-    const prediction = data?.prediction;
-    if (!prediction) {
-      throw new Error("Le service IA n'a renvoyé aucun résultat.");
-    }
-
-    const suggestion = {
-      material: prediction.material || "autre",
-      confidence: prediction.confidence || 0,
-      detectedObject: prediction.detectedObject || prediction.label || "Objet détecté",
-      rawDetectedObject: prediction.rawDetectedObject || "",
-      recyclable: Boolean(prediction.recyclable),
-      detectionStatus: prediction.detectionStatus || "python_keras",
-      reason: prediction.reason || "",
-      modelSource: prediction.modelSource || "python-keras",
-      topPredictions: prediction.topPredictions || [],
+      return null;
     };
 
-    setModelStatus({ pythonBackendAvailable: true });
+    const runPythonMaterialClassifier = async () => {
+      try {
+        const formData = new FormData();
+        formData.append("photo", file);
+        const data = await apiRequest("/scans/predict", {
+          method: "POST",
+          token,
+          body: formData,
+          timeoutMs: 25000,
+        });
+        const prediction = data?.prediction;
+        if (!prediction) return null;
+        return {
+          material: prediction.material || "autre",
+          confidence: prediction.confidence || 0,
+          detectedObject: prediction.detectedObject || prediction.label || "Objet détecté",
+          rawDetectedObject: prediction.rawDetectedObject || "",
+          recyclable: Boolean(prediction.recyclable),
+          detectionStatus: prediction.detectionStatus || "python_keras",
+          reason: prediction.reason || "",
+          modelSource: prediction.modelSource || "python-keras",
+          topPredictions: prediction.topPredictions || [],
+        };
+      } catch (err) {
+        console.warn("Service Python Keras:", err);
+        errors.push(`Service IA (Python): ${err?.message || "erreur inconnue"}`);
+        return null;
+      }
+    };
+
+    const runMobileNet = async () => {
+      try {
+        await withTimeout(
+          loadMobileNetModel(),
+          10000,
+          "Chargement MobileNet trop long."
+        );
+        const predictions = await withTimeout(
+          detectObjectsWithMobileNetOnly(img),
+          10000,
+          "Analyse MobileNet trop longue."
+        );
+        if (!predictions?.length) return null;
+        return buildMobileNetSuggestionFromPredictions(predictions);
+      } catch (err) {
+        console.warn("MobileNet:", err);
+        errors.push(`MobileNet: ${err?.message || "erreur inconnue"}`);
+        return null;
+      }
+    };
+
+    const pythonPrediction = PYTHON_MOBILENET_FIRST_MODE
+      ? await runPythonMaterialClassifier()
+      : null;
+
+    let kerasPrediction = pythonPrediction;
+
+    if (pythonPrediction) {
+      const suggestion = mergeHybridPrediction(pythonPrediction, null);
+      if (!isUncertainDetection(suggestion)) {
+        setModelStatus((prev) => ({
+          ...prev,
+          hybrid: false,
+          browserModelAvailable: prev?.browserModelAvailable,
+          pythonBackendAvailable: true,
+          mobileNetOnly: false,
+        }));
+        setDetectionResult(suggestion);
+        setMaterial(suggestion.material || "autre");
+        setLabel(suggestion.detectedObject || "Objet détecté");
+        return suggestion;
+      }
+    }
+
+    const tmPrediction = await runTeachableMachineClassifier();
+    if (tmPrediction) {
+      const suggestion = mergeHybridPrediction(tmPrediction, null);
+      if (!isUncertainDetection(suggestion)) {
+        setModelStatus((prev) => ({
+          ...prev,
+          hybrid: false,
+          browserModelAvailable: true,
+          pythonBackendAvailable: prev?.pythonBackendAvailable,
+          mobileNetOnly: false,
+        }));
+        setDetectionResult(suggestion);
+        setMaterial(suggestion.material || "autre");
+        setLabel(suggestion.detectedObject || "Objet détecté");
+        return suggestion;
+      }
+      kerasPrediction = kerasPrediction || tmPrediction;
+    }
+
+    if (!kerasPrediction) {
+      kerasPrediction = PYTHON_MOBILENET_FIRST_MODE
+        ? null
+        : await runPythonMaterialClassifier();
+    }
+
+    const mobileNetSuggestion = await runMobileNet();
+
+    const suggestion = mergeHybridPrediction(kerasPrediction, mobileNetSuggestion);
+    if (suggestion && !mobileNetSuggestion) {
+      suggestion.allMobileNetTop =
+        "Aucun objet MobileNet fiable — attendez le chargement du modèle ou cadrez l'objet seul, sans mains.";
+    }
+    if (!suggestion) {
+      const debugHint = errors.length ? ` Détails: ${errors.join(" | ")}` : "";
+      throw new Error(
+        kerasPrediction === null
+          ? `Analyse impossible. Lancez npm run ai ou vérifiez le modèle navigateur.${debugHint}`
+          : "Le service IA n'a renvoyé aucun résultat."
+      );
+    }
+
+    if (kerasPrediction) {
+      const fromBrowser = kerasPrediction.modelSource === "custom";
+      setModelStatus((prev) => ({
+        ...prev,
+        hybrid: true,
+        browserModelAvailable: fromBrowser || prev?.browserModelAvailable,
+        pythonBackendAvailable: !fromBrowser || prev?.pythonBackendAvailable,
+        mobileNetOnly: false,
+      }));
+    } else {
+      setModelStatus((prev) => ({ ...prev, mobileNetOnly: true }));
+    }
+
     setDetectionResult(suggestion);
     setMaterial(suggestion.material || "autre");
     setLabel(suggestion.detectedObject || "Objet détecté");
@@ -545,7 +956,9 @@ export default function Scan() {
       !allowScan ||
       !token ||
       modelLoading ||
-      modelStatus?.pythonBackendUnavailable
+      (!modelStatus?.browserModelAvailable &&
+        !modelStatus?.pythonBackendAvailable &&
+        modelStatus?.pythonBackendUnavailable)
     ) {
       return undefined;
     }
@@ -587,6 +1000,7 @@ export default function Scan() {
     allowScan,
     token,
     modelLoading,
+    modelStatus?.browserModelAvailable,
     modelStatus?.pythonBackendAvailable,
     modelStatus?.pythonBackendUnavailable,
     analyzeCurrentPhoto,
@@ -603,6 +1017,7 @@ export default function Scan() {
 
   const startLiveCamera = useCallback(async () => {
     setCameraError("");
+    setBarcodeError("");
     if (!navigator.mediaDevices?.getUserMedia) {
       setCameraError(
         "Caméra live indisponible (navigateur non compatible ou accès sécurité). Utilisez « Appareil photo » sur mobile.",
@@ -621,7 +1036,7 @@ export default function Scan() {
       });
       streamRef.current = stream;
       setCameraLive(true);
-      
+
       setTimeout(async () => {
         const vid = videoRef.current;
         if (vid) {
@@ -679,6 +1094,13 @@ export default function Scan() {
       detectedObject: option.label,
       rawDetectedObject: option.value,
       recyclable: option.recyclable,
+      sortingClass:
+        option.sortingClass ||
+        (option.material === "recyclage_specialise"
+          ? "recyclage_specialise"
+          : option.recyclable
+          ? "recyclable"
+          : "non_recyclable"),
       detectionStatus: "user_corrected",
       reason: "Classe corrigée par l'utilisateur et ajoutée au dataset d'entraînement.",
       modelSource: "user-correction",
@@ -735,10 +1157,11 @@ export default function Scan() {
 
     try {
       const result = await analyzeCurrentPhoto();
+      const hybridNote = result.modelSource === "hybrid-python-mobilenet" ? " (objet + matière)" : "";
       setSuccess(
         result.recyclable
-          ? "Analyse terminée : objet recyclable détecté. Cliquez sur Enregistrer ce scan."
-          : "Analyse terminée : objet non recyclable ou à vérifier. Vous pouvez enregistrer le scan."
+          ? `Analyse terminée${hybridNote} : ${result.detectedObject} recyclable. Enregistrez le scan.`
+          : `Analyse terminée${hybridNote} : ${result.detectedObject}. Vérifiez puis enregistrez le scan.`
       );
     } catch (err) {
       setModelStatus({ pythonBackendUnavailable: true });
@@ -760,13 +1183,56 @@ export default function Scan() {
     try {
       let resultToSave = detectionResult;
       if (!resultToSave) {
-        setDetecting(true);
-        resultToSave = await analyzeCurrentPhoto();
-        setDetecting(false);
+        if (barcodeResult) {
+          const barcodeSortingClass =
+            material === "recyclage_specialise"
+              ? "recyclage_specialise"
+              : material === "autre"
+              ? "non_recyclable"
+              : "recyclable";
+          resultToSave = {
+            material,
+            confidence: 100,
+            detectedObject: `Code-barres ${barcodeResult.value}`,
+            rawDetectedObject: barcodeResult.value,
+            recyclable: material !== "autre",
+            sortingClass: barcodeSortingClass,
+            detectionStatus: "barcode",
+            reason:
+              "Code-barres détecté. La matière a été renseignée manuellement.",
+            modelSource: "barcode-detector",
+            topPredictions: [],
+          };
+        } else {
+          setDetecting(true);
+          resultToSave = await analyzeCurrentPhoto();
+          setDetecting(false);
+        }
       }
 
-      const detectedLabel = resultToSave.detectedObject || label || "Objet détecté";
+      const detectedLabel = limitText(resultToSave.detectedObject || label || "Objet détecté", 140);
       const detectedMaterial = resultToSave.material || material || "autre";
+      const detectedObject = limitText(resultToSave.detectedObject || detectedLabel, 140);
+      const detectionStatus = limitText(resultToSave.detectionStatus || "", 60);
+      const detectionReason = limitText(resultToSave.reason || "", 500);
+      const detectedSortingClass =
+        resultToSave.sortingClass ||
+        (detectedMaterial === "recyclage_specialise"
+          ? "recyclage_specialise"
+          : resultToSave.recyclable
+          ? "recyclable"
+          : "non_recyclable");
+
+      if (isUncertainDetection(resultToSave) && resultToSave.modelSource !== "user-correction") {
+        setDetectionResult(resultToSave);
+        setMaterial(detectedMaterial);
+        setLabel(detectedObject);
+        setError(
+          "Le résultat est incertain. Corrigez la vraie classe avec « Ajouter au dataset et corriger » avant d'enregistrer."
+        );
+        return;
+      }
+
       const formData = new FormData();
       formData.append("label", detectedLabel);
       formData.append("material", detectedMaterial);
@@ -776,15 +1242,23 @@ export default function Scan() {
       const isRecyclable =
         resultToSave?.recyclable ??
         (detectedMaterial !== "autre" &&
-          ["plastique", "verre", "papier_carton", "metal", "electronique", "organique"].includes(
-            detectedMaterial
-          ));
+          [
+            "recyclable",
+            "recyclage_specialise",
+            "plastique",
+            "verre",
+            "papier_carton",
+            "metal",
+            "electronique",
+            "organique",
+          ].includes(detectedMaterial));
 
       formData.append("recyclable", String(Boolean(isRecyclable)));
-      formData.append("detectedObject", resultToSave.detectedObject || "");
+      formData.append("detectedObject", detectedObject);
       formData.append("confidence", String(resultToSave.confidence || 0));
-      formData.append("detectionStatus", resultToSave.detectionStatus || "");
-      formData.append("detectionReason", resultToSave.reason || "");
+      formData.append("detectionStatus", detectionStatus);
+      formData.append("sortingClass", detectedSortingClass);
+      formData.append("detectionReason", detectionReason);
 
       const data = await apiRequest("/scans", {
         method: "POST",
@@ -801,6 +1275,7 @@ export default function Scan() {
       setLabel("");
       setPhoto(null);
       setPhotoPreview(null);
+      setBarcodeResult(null);
       setDetectionResult(null);
       setNearbyCenters([]);
       setGeoMessage("");
@@ -850,8 +1325,8 @@ export default function Scan() {
               <div className="badge">📷 Scan object</div>
               <h2 style={{ margin: "10px 0 6px" }}>Scanner un objet</h2>
               <div className="app-muted">
-                Photographiez un objet : EcoScan détecte automatiquement son matériau,
-                sa recyclabilité, puis enregistre le scan dans votre historique.
+                Photographiez un objet : EcoScan reconnaît le type d&apos;objet (téléphone,
+                télécommande, bouteille…) et la matière recyclable via l&apos;IA hybride.
                 {modelLoading && (
                   <div style={{ marginTop: 8, fontSize: 12, color: "#ff9800" }}>
                     ⏳ Chargement du modèle IA (première utilisation)...
@@ -859,13 +1334,17 @@ export default function Scan() {
                 )}
                 {modelStatus && (
                   <div style={{ marginTop: 8, fontSize: 12 }}>
-                    {modelLoading
-                      ? "⏳ Connexion au service IA Python/Keras..."
+                    {PYTHON_MOBILENET_FIRST_MODE
+                      ? "✅ MobileNetV2 Python prioritaire (npm run ai)"
+                      : modelLoading
+                      ? "⏳ Chargement des modèles IA..."
+                      : modelStatus.browserModelAvailable
+                      ? "✅ Modèle déchets actif (navigateur)"
                       : modelStatus.pythonBackendAvailable
-                      ? `✅ Service IA Python/Keras actif${modelStatus.labels ? ` (${modelStatus.labels} classes)` : ""}`
+                      ? `✅ Service IA TensorFlow actif${modelStatus.labels ? ` (${modelStatus.labels} classes)` : ""}`
                       : modelStatus.pythonBackendUnavailable
-                      ? "⚠️ Service IA Python indisponible — lancez npm run ai"
-                      : "ℹ️ Analyse via service IA Python/Keras"}
+                      ? "⚠️ Aucun modèle matière disponible — vérifiez public/models/waste-classifier ou lancez npm run ai"
+                      : "ℹ️ Analyse hybride TensorFlow MobileNet + modèle déchets"}
                   </div>
                 )}
               </div>
@@ -878,7 +1357,7 @@ export default function Scan() {
                     </div>
                     {detectionResult.recyclable !== undefined && (
                       <div style={{ marginTop: 4, fontWeight: 700, color: detectionResult.recyclable ? "#4caf50" : "#f44336" }}>
-                        {detectionResult.recyclable ? "♻️ Recyclable" : "⚠️ Non recyclable"}
+                        {formatRecyclingStatus(detectionResult)}
                       </div>
                     )}
                     {detectionResult.reason && (
@@ -886,10 +1365,26 @@ export default function Scan() {
                         {detectionResult.reason}
                       </div>
                     )}
+                    {isUncertainDetection(detectionResult) && (
+                      <div className="form-error" style={{ marginTop: 8 }}>
+                        Résultat trop incertain pour être enregistré directement. Reprenez une photo
+                        avec un seul objet bien cadré ou corrigez la classe ci-dessous.
+                      </div>
+                    )}
+                    {detectionResult.allMobileNetTop && (
+                      <div style={{ marginTop: 4, fontSize: 12, color: "#1565c0" }}>
+                        Objet (MobileNet): {detectionResult.allMobileNetTop}
+                      </div>
+                    )}
+                    {detectionResult.mobileNetObject && (
+                      <div style={{ marginTop: 4, fontSize: 12, color: "#1565c0" }}>
+                        Classe MobileNet retenue: {detectionResult.mobileNetObject}
+                      </div>
+                    )}
                     {Array.isArray(detectionResult.topPredictions) &&
                       detectionResult.topPredictions.length > 1 && (
                         <div style={{ marginTop: 4, fontSize: 12 }}>
-                          Top IA:{" "}
+                          Top matière (IA déchets):{" "}
                           {detectionResult.topPredictions
                             .map((item) => `${item.displayLabel || item.label} ${item.confidence}%`)
                             .join(" · ")}
@@ -1027,14 +1522,13 @@ export default function Scan() {
             {success && <p className="form-info" style={{ marginTop: 12 }}>{success}</p>}
 
             <form onSubmit={onSubmit} style={{ marginTop: 14 }}>
-              {/* Photo : galerie, caméra appareil, ou webcam */}
+              {/* Photo : galerie ou webcam */}
               <div style={{ marginBottom: 16, padding: 12, backgroundColor: "#f9f9f9", borderRadius: 8 }}>
                 <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginBottom: 8 }}>
                   📸 Photo (optionnel)
                 </label>
                 <p className="app-muted" style={{ marginTop: 0, marginBottom: 10 }}>
-                  Galerie fichier, ouverture caméra téléphone (« Appareil photo »), ou aperçu caméra depuis le navigateur (HTTPS /
-                  localhost).
+                  Choisissez une image depuis la galerie ou utilisez l'aperçu caméra depuis le navigateur (HTTPS / localhost).
                 </p>
                 <div className="app-row scan-photo-actions" style={{ flexWrap: "wrap", gap: 8 }}>
                   <label className="app-btn" style={{ cursor: "pointer", marginBottom: 0 }}>
@@ -1042,17 +1536,6 @@ export default function Scan() {
                     <input
                       type="file"
                       accept="image/*"
-                      hidden
-                      onChange={handleFileChosen}
-                      disabled={modelLoading || detecting || loading}
-                    />
-                  </label>
-                  <label className="app-btn app-btn-primary" style={{ cursor: "pointer", marginBottom: 0 }}>
-                    Appareil photo
-                    <input
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
                       hidden
                       onChange={handleFileChosen}
                       disabled={modelLoading || detecting || loading}
@@ -1084,6 +1567,7 @@ export default function Scan() {
                   )}
                 </div>
                 {cameraError ? <p className="form-error" style={{ marginTop: 10, marginBottom: 0 }}>{cameraError}</p> : null}
+                {barcodeError ? <p className="form-error" style={{ marginTop: 10, marginBottom: 0 }}>{barcodeError}</p> : null}
                 {cameraLive && (
                   <div style={{ position: "relative", width: "100%", maxHeight: 450, marginTop: 12, borderRadius: 8, overflow: "hidden", background: "#111" }}>
                     <video
@@ -1108,6 +1592,53 @@ export default function Scan() {
                         pointerEvents: "none",
                       }}
                     />
+                    {barcodeScanning && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          left: "50%",
+                          top: "50%",
+                          transform: "translate(-50%, -50%)",
+                          width: "70%",
+                          maxWidth: 420,
+                          border: "3px solid #4caf50",
+                          borderRadius: 12,
+                          padding: 12,
+                          color: "#fff",
+                          textAlign: "center",
+                          background: "rgba(0,0,0,0.25)",
+                        }}
+                      >
+                        Placez le code-barres dans le cadre
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {barcodeResult && (
+                  <div style={{ marginTop: 12, padding: 12, backgroundColor: "#e8f5e9", borderRadius: 8 }}>
+                    <div style={{ fontWeight: 800, color: "#1b8f4f" }}>
+                      Code-barres détecté : {barcodeResult.value}
+                    </div>
+                    <div className="app-muted" style={{ marginTop: 4, fontSize: 12 }}>
+                      Format : {barcodeResult.format}. Sélectionnez la matière de l'emballage avant d'enregistrer.
+                    </div>
+                    <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginTop: 10, marginBottom: 6 }}>
+                      Matière de l'emballage
+                    </label>
+                    <select
+                      className="app-input"
+                      value={material}
+                      onChange={(e) => setMaterial(e.target.value)}
+                      disabled={loading}
+                      style={{ width: "100%" }}
+                    >
+                      {MATERIAL_OPTIONS.map((item) => (
+                        <option key={item.value} value={item.value}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 )}
 
@@ -1151,16 +1682,77 @@ export default function Scan() {
               <div className="app-row" style={{ marginTop: 12 }}>
                 <button
                   className="app-btn app-btn-primary"
-                  disabled={loading || detecting || !photoPreview}
+                  disabled={
+                    loading ||
+                    detecting ||
+                    (!photoPreview && !barcodeResult) ||
+                    (detectionResult &&
+                      isUncertainDetection(detectionResult) &&
+                      detectionResult.modelSource !== "user-correction")
+                  }
                   type="submit"
                 >
-                  {loading ? "Enregistrement..." : detectionResult ? "Enregistrer ce scan" : "Analyser et enregistrer"}
+                  {loading
+                    ? "Enregistrement..."
+                    : barcodeResult
+                    ? "Enregistrer le code-barres"
+                    : detectionResult
+                    ? "Enregistrer ce scan"
+                    : "Analyser et enregistrer"}
                 </button>
                 <button className="app-btn" type="button" onClick={loadHistory} disabled={historyLoading}>
                   Rafraîchir
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+
+        <div className="app-card" style={{ marginBottom: 16 }}>
+          <div className="app-row" style={{ justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+            <div>
+              <div className="badge">🌱 Suivi d&apos;Impact</div>
+              <h3 style={{ margin: "10px 0 6px" }}>Votre contribution environnementale</h3>
+              <p className="app-muted" style={{ margin: 0 }}>
+                Estimation basée sur vos scans recyclables enregistrés.
+              </p>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "#1b8f4f" }}>
+                {impactSummary.recyclableCount}
+              </div>
+              <div className="app-muted">déchets valorisés</div>
+            </div>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+              gap: 12,
+              marginTop: 16,
+            }}
+          >
+            <div style={{ padding: 12, borderRadius: 10, background: "#f0faf5" }}>
+              <div className="app-muted" style={{ fontSize: 12 }}>Plastique réduit</div>
+              <div style={{ fontWeight: 800, fontSize: 20 }}>
+                {formatImpactNumber(impactSummary.plasticKg)} kg
+              </div>
+              <div className="app-muted" style={{ fontSize: 12 }}>
+                ≈ {impactSummary.plasticCount} objet(s) plastique(s)
+              </div>
+            </div>
+            <div style={{ padding: 12, borderRadius: 10, background: "#f0faf5" }}>
+              <div className="app-muted" style={{ fontSize: 12 }}>CO₂ évité estimé</div>
+              <div style={{ fontWeight: 800, fontSize: 20 }}>
+                {formatImpactNumber(impactSummary.co2Kg)} kg
+              </div>
+              <div className="app-muted" style={{ fontSize: 12 }}>grâce au tri orienté</div>
+            </div>
+            <div style={{ padding: 12, borderRadius: 10, background: "#f0faf5" }}>
+              <div className="app-muted" style={{ fontSize: 12 }}>Points écologiques</div>
+              <div style={{ fontWeight: 800, fontSize: 20 }}>{impactSummary.points}</div>
+              <div className="app-muted" style={{ fontSize: 12 }}>sur vos scans recyclables</div>
+            </div>
           </div>
         </div>
 
@@ -1182,7 +1774,7 @@ export default function Scan() {
                     >
                       <div style={{ display: "grid", gap: 4 }}>
                         <div>
-                          <b>{scan.label}</b> — {scan.recyclable ? "♻️ Recyclable" : "⚠️ Non recyclable / à vérifier"}
+                          <b>{scan.label}</b> — {formatRecyclingStatus(scan)}
                         </div>
                         <div className="app-muted">
                           Matériau: <b>{getMaterialLabel(scan.material)}</b>

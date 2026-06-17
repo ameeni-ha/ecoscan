@@ -18,6 +18,7 @@ import RecyclingCenters from "./RecyclingCenters";
 import Leaderboard from "./Leaderboard";
 import Profile from "./Profile";
 import Meeting from "./Meeting";
+import Notifications from "./Notifications";
 import AdminUsers from "./AdminUsers";
 import AdminDashboard from "./AdminDashboard";
 import ModerateForum from "./ModerateForum";
@@ -109,6 +110,14 @@ function App() {
           element={
             <ProtectedRoute>
               <Meeting />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/notifications"
+          element={
+            <ProtectedRoute>
+              <Notifications />
             </ProtectedRoute>
           }
         />

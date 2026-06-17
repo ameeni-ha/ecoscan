@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 
 const ACCOUNT_TYPES = {
@@ -18,6 +18,7 @@ const MATERIAL_OPTIONS = [
 
 const Inscription = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { register, isAuthenticated, isReady } = useAuth();
 
   const [fullName, setFullName] = useState("");
@@ -32,6 +33,11 @@ const Inscription = () => {
   const [district, setDistrict] = useState("");
   const [openingHours, setOpeningHours] = useState("");
   const [capacityPerDayKg, setCapacityPerDayKg] = useState("");
+  const [externalSource, setExternalSource] = useState("");
+  const [externalSourceId, setExternalSourceId] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -50,6 +56,42 @@ const Inscription = () => {
       navigate("/dashboard", { replace: true });
     }
   }, [isAuthenticated, isReady, navigate]);
+
+  useEffect(() => {
+    const requestedAccountType = searchParams.get("accountType");
+    if (requestedAccountType === ACCOUNT_TYPES.centre) {
+      setAccountType(ACCOUNT_TYPES.centre);
+    }
+
+    const nextCenterName = searchParams.get("centerName");
+    const nextCity = searchParams.get("city");
+    const nextDistrict = searchParams.get("district");
+    const nextOpeningHours = searchParams.get("openingHours");
+    const nextDescription = searchParams.get("description");
+    const nextLatitude = searchParams.get("latitude");
+    const nextLongitude = searchParams.get("longitude");
+    const nextExternalSource = searchParams.get("externalSource");
+    const nextExternalSourceId = searchParams.get("externalSourceId");
+    const nextMaterials = searchParams.get("materials");
+
+    if (nextCenterName) setCenterName(nextCenterName);
+    if (nextCity) setCity(nextCity);
+    if (nextDistrict) setDistrict(nextDistrict);
+    if (nextOpeningHours) setOpeningHours(nextOpeningHours);
+    if (nextDescription) setDescription(nextDescription);
+    if (nextLatitude) setLatitude(nextLatitude);
+    if (nextLongitude) setLongitude(nextLongitude);
+    if (nextExternalSource) setExternalSource(nextExternalSource);
+    if (nextExternalSourceId) setExternalSourceId(nextExternalSourceId);
+    if (nextMaterials) {
+      setMaterialsAccepted(
+        nextMaterials
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      );
+    }
+  }, [searchParams]);
 
   const handleConnection = () => {
     navigate("/connexion");
@@ -83,6 +125,11 @@ const Inscription = () => {
               district,
               openingHours,
               capacityPerDayKg,
+              description,
+              latitude,
+              longitude,
+              externalSource,
+              externalSourceId,
             }
           : undefined,
       });
@@ -127,6 +174,14 @@ const Inscription = () => {
           {!isReady && <p className="form-info">Verification de votre session...</p>}
 
           {error && <p className="form-error">{error}</p>}
+
+          {externalSource && externalSourceId ? (
+            <p className="form-info" style={{ marginBottom: 12, lineHeight: 1.5 }}>
+              Ce formulaire est prérempli pour lier le centre{" "}
+              <b>{centerName || "externe"}</b> ({externalSource.toUpperCase()}) à un compte EcoScan.
+              Choisissez l&apos;email que vous contrôlez, puis terminez l&apos;inscription.
+            </p>
+          ) : null}
 
           <form className="ecoscan-form" onSubmit={handleSubmit}>
             <div className="ecoscan-field">

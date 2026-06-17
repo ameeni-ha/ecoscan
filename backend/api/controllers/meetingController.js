@@ -3,7 +3,27 @@ const RecyclingCenter = require("../models/RecyclingCenter");
 const User = require("../models/User");
 const Scan = require("../models/Scan");
 const NotificationService = require("../utils/NotificationService");
+const { centerAcceptsScanMaterial } = require("../utils/helpers");
 const mongoose = require("mongoose");
+
+const formatMeetingScan = (scan) => ({
+  id: scan._id.toString(),
+  material: scan.material,
+  sortingClass: scan.sortingClass || "",
+  label: scan.label,
+  photoUrl: scan.photoUrl,
+  points: scan.points,
+});
+
+const getManagedCenterIdsForUser = async (user) => {
+  if (user.role === "admin") return null;
+  const rcByEmail = await RecyclingCenter.find({
+    email: String(user.email || "").trim().toLowerCase(),
+  })
+    .select("_id")
+    .lean();
+  return rcByEmail.map((center) => center._id.toString());
+};
 
 class MeetingController {
   // Create meeting request
@@ -14,38 +34,101 @@ class MeetingController {
       const message = String(req.body?.message || "").trim().slice(0, 2000);
       const material = String(req.body?.material || "").trim();
       const scanId = req.body?.scanId || null;
+      const scanIdsInput = Array.isArray(req.body?.scanIds)
+        ? req.body.scanIds
+        : scanId
+        ? [scanId]
+        : [];
+      const scanIds = [...new Set(scanIdsInput.map((id) => String(id || "").trim()))].filter((id) =>
+        mongoose.Types.ObjectId.isValid(id)
+      );
 
       if (!centerUserId) {
         return res.status(400).json({ message: "Centre obligatoire" });
       }
 
-      const centerDoc = await RecyclingCenter.findById(centerUserId).select("_id centerName").lean();
+      const centerDoc = await RecyclingCenter.findById(centerUserId)
+        .select("_id centerName email materialsAccepted")
+        .lean();
       if (!centerDoc) {
         return res.status(404).json({ message: "Centre inconnu ou sans fiche recycleur" });
+      }
+
+      const centerAccount = await User.findOne({
+        email: String(centerDoc.email || "").trim().toLowerCase(),
+        accountType: "centre_de_collecte",
+      })
+        .select("_id")
+        .lean();
+
+      if (!centerAccount) {
+        return res.status(400).json({
+          message:
+            "Ce centre est affiché sur la carte mais n'a pas encore de compte EcoScan. Il ne peut pas recevoir de notification de rendez-vous.",
+        });
+      }
+
+      let selectedScans = [];
+      if (scanIds.length > 0) {
+        selectedScans = await Scan.find({
+          _id: { $in: scanIds },
+          userId: req.user._id,
+        })
+          .select("_id label material sortingClass photoUrl points")
+          .lean();
+
+        if (selectedScans.length !== scanIds.length) {
+          return res.status(400).json({
+            message: "Un ou plusieurs scans sélectionnés sont introuvables ou ne vous appartiennent pas.",
+          });
+        }
+
+        const refusedMaterials = selectedScans
+          .map((scan) => scan.material)
+          .filter((scanMaterial) => !centerAcceptsScanMaterial(centerDoc, scanMaterial));
+
+        if (refusedMaterials.length > 0) {
+          return res.status(400).json({
+            message: `Ce centre n'accepte pas tous les matériaux sélectionnés (${[
+              ...new Set(refusedMaterials),
+            ].join(", ")}). Choisissez un autre centre ou retirez ces scans.`,
+          });
+        }
       }
 
       let preferredDate = null;
       if (preferredDateRaw) {
         const d = new Date(preferredDateRaw);
         preferredDate = Number.isNaN(d.getTime()) ? null : d;
+        if (!preferredDate || preferredDate.getTime() < Date.now()) {
+          return res.status(400).json({
+            message: "La date du rendez-vous ne peut pas être avant la date actuelle.",
+          });
+        }
       }
+
+      const meetingMaterial =
+        selectedScans.length > 0
+          ? [...new Set(selectedScans.map((scan) => scan.material).filter(Boolean))].join(", ")
+          : material;
 
       const mr = await MeetingRequest.create({
         requesterId: req.user._id,
         centerUserId: centerDoc._id,
         preferredDate,
         message,
-        material,
-        scanId: scanId && mongoose.Types.ObjectId.isValid(scanId) ? scanId : null,
+        material: meetingMaterial,
+        scanId: scanIds[0] || null,
+        scanIds,
         status: "pending",
       });
 
       // Notifier le centre
       const requester = await User.findById(req.user._id).select("firstName lastName");
       await NotificationService.notifyNewMeetingRequest(
-        centerUserId,
+        centerAccount._id,
         `${requester.firstName} ${requester.lastName}`,
-        material || "matériau inconnu"
+        meetingMaterial || "matériau inconnu"
       );
 
       return res.status(201).json({ 
@@ -66,6 +149,7 @@ class MeetingController {
         .limit(50)
         .populate("centerUserId", "centerName city phone address district")
         .populate("scanId", "material label photoUrl points")
+        .populate("scanIds", "material sortingClass label photoUrl points")
         .lean();
 
       const meetings = rows.map((m) => ({
@@ -88,13 +172,8 @@ class MeetingController {
               district: m.centerUserId.district,
             }
           : null,
-        scan: m.scanId ? {
-          id: m.scanId._id.toString(),
-          material: m.scanId.material,
-          label: m.scanId.label,
-          photoUrl: m.scanId.photoUrl,
-          points: m.scanId.points,
-        } : null,
+        scan: m.scanId ? formatMeetingScan(m.scanId) : null,
+        scans: Array.isArray(m.scanIds) ? m.scanIds.map(formatMeetingScan) : [],
       }));
 
       return res.json({ meetings });
@@ -114,15 +193,10 @@ class MeetingController {
           .limit(200)
           .populate("requesterId", "firstName lastName email")
           .populate("scanId", "material label photoUrl")
+          .populate("scanIds", "material sortingClass label photoUrl points")
           .lean();
       } else {
-        const myCenterIds = [];
-        const rcByEmail = await RecyclingCenter.findOne({
-          email: String(req.user.email || "").trim().toLowerCase(),
-        })
-          .select("_id")
-          .lean();
-        if (rcByEmail) myCenterIds.push(rcByEmail._id.toString());
+        const myCenterIds = (await getManagedCenterIdsForUser(req.user)) || [];
 
         const oids = myCenterIds
           .filter((id) => mongoose.Types.ObjectId.isValid(id))
@@ -137,6 +211,7 @@ class MeetingController {
           .limit(100)
           .populate("requesterId", "firstName lastName email phone")
           .populate("scanId", "material label photoUrl points")
+          .populate("scanIds", "material sortingClass label photoUrl points")
           .lean();
       }
 
@@ -158,13 +233,8 @@ class MeetingController {
               phone: m.requesterId.phone,
             }
           : null,
-        scan: m.scanId ? {
-          id: m.scanId._id.toString(),
-          material: m.scanId.material,
-          label: m.scanId.label,
-          photoUrl: m.scanId.photoUrl,
-          points: m.scanId.points,
-        } : null,
+        scan: m.scanId ? formatMeetingScan(m.scanId) : null,
+        scans: Array.isArray(m.scanIds) ? m.scanIds.map(formatMeetingScan) : [],
       }));
 
       return res.json({ meetings });
@@ -179,11 +249,10 @@ class MeetingController {
    */
   static async acceptMeeting(req, res) {
     try {
-      const centerId = req.user?._id;
       const { meetingId } = req.params;
       const { meetingDate, notes } = req.body;
 
-      if (!centerId) {
+      if (!req.user?._id) {
         return res.status(401).json({ message: "Non authentifié" });
       }
 
@@ -193,7 +262,8 @@ class MeetingController {
         return res.status(404).json({ message: "Demande non trouvée" });
       }
 
-      if (meeting.centerUserId.toString() !== centerId.toString()) {
+      const managedCenterIds = await getManagedCenterIdsForUser(req.user);
+      if (managedCenterIds && !managedCenterIds.includes(meeting.centerUserId.toString())) {
         return res.status(403).json({ message: "Vous n'êtes pas autorisé" });
       }
 
@@ -206,11 +276,20 @@ class MeetingController {
       meeting.status = "accepted";
       meeting.acceptedAt = new Date();
       meeting.meetingConfirmedDate = meetingDate ? new Date(meetingDate) : null;
+      if (
+        meeting.meetingConfirmedDate &&
+        Number.isFinite(meeting.meetingConfirmedDate.getTime()) &&
+        meeting.meetingConfirmedDate.getTime() < Date.now()
+      ) {
+        return res.status(400).json({
+          message: "La date confirmée ne peut pas être avant la date actuelle.",
+        });
+      }
       meeting.notes = notes || "";
       await meeting.save();
 
       // Notifier l'utilisateur
-      const center = await RecyclingCenter.findById(centerId);
+      const center = await RecyclingCenter.findById(meeting.centerUserId);
       await NotificationService.notifyMeetingAccepted(
         meeting.requesterId,
         center.centerName,
@@ -232,11 +311,10 @@ class MeetingController {
    */
   static async rejectMeeting(req, res) {
     try {
-      const centerId = req.user?._id;
       const { meetingId } = req.params;
       const { rejectionReason } = req.body;
 
-      if (!centerId) {
+      if (!req.user?._id) {
         return res.status(401).json({ message: "Non authentifié" });
       }
 
@@ -246,7 +324,8 @@ class MeetingController {
         return res.status(404).json({ message: "Demande non trouvée" });
       }
 
-      if (meeting.centerUserId.toString() !== centerId.toString()) {
+      const managedCenterIds = await getManagedCenterIdsForUser(req.user);
+      if (managedCenterIds && !managedCenterIds.includes(meeting.centerUserId.toString())) {
         return res.status(403).json({ message: "Vous n'êtes pas autorisé" });
       }
 
@@ -262,7 +341,7 @@ class MeetingController {
       await meeting.save();
 
       // Notifier l'utilisateur
-      const center = await RecyclingCenter.findById(centerId);
+      const center = await RecyclingCenter.findById(meeting.centerUserId);
       await NotificationService.notifyMeetingRejected(
         meeting.requesterId,
         center.centerName

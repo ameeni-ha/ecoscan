@@ -17,6 +17,7 @@ const createScanRoutes = require("./routes/scanRoutes");
 const createMeetingRoutes = require("./routes/meetingRoutes");
 const createUserRoutes = require("./routes/userRoutes");
 const createAdminRoutes = require("./routes/adminRoutes");
+const createNotificationRoutes = require("./routes/notificationRoutes");
 const PointsService = require("./utils/PointsService");
 const { sanitizeUser: sanitizeUserFromHelpers } = require("./utils/helpers");
 
@@ -35,21 +36,120 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 const sanitizeUser = (user) => sanitizeUserFromHelpers(user);
 
-const ALLOWED_CENTER_TYPES = [
-  "centre_prive",
-  "centre_public",
-  "point_depot",
-  "ong_association",
-];
-
 const ALLOWED_MATERIALS = [
+  "recyclable",
+  "recyclage_specialise",
   "plastique",
   "verre",
   "papier_carton",
   "metal",
   "electronique",
   "organique",
+  "autre",
 ];
+
+const CENTER_MATERIAL_TAGS = [
+  "plastic",
+  "paper",
+  "glass",
+  "metal",
+  "electronic",
+  "textile",
+  "organic",
+  "mixed",
+];
+
+const SCAN_MATERIAL_TO_CENTER_TAGS = {
+  recyclable: [],
+  recyclage_specialise: ["electronic", "mixed"],
+  plastique: ["plastic"],
+  verre: ["glass"],
+  papier_carton: ["paper"],
+  metal: ["metal"],
+  electronique: ["electronic"],
+  organique: ["organic"],
+  autre: [],
+};
+
+const normalizeCenterMaterials = (materialsAccepted) =>
+  Array.from(
+    new Set(
+      Array.isArray(materialsAccepted)
+        ? materialsAccepted.flatMap((material) => {
+            if (CENTER_MATERIAL_TAGS.includes(material)) return [material];
+            if (!ALLOWED_MATERIALS.includes(material)) return [];
+            return SCAN_MATERIAL_TO_CENTER_TAGS[material] || [];
+          })
+        : []
+    )
+  );
+
+const buildCenterPayloadFromRegistration = (user, passwordHash, collectionCenter = {}) => {
+  const parsedLatitude = Number(collectionCenter.latitude);
+  const parsedLongitude = Number(collectionCenter.longitude);
+  const externalSource = ["anged", "osm"].includes(
+    String(collectionCenter.externalSource || "").trim().toLowerCase()
+  )
+    ? String(collectionCenter.externalSource || "").trim().toLowerCase()
+    : "";
+
+  return {
+    firstName: user.firstName,
+    lastName: user.lastName,
+    email: String(user.email || "").trim().toLowerCase(),
+    passwordHash,
+    phone: user.phone || "",
+    centerName: String(collectionCenter.centerName || "").trim(),
+    managerName: String(collectionCenter.managerName || "").trim(),
+    centerType: "public",
+    materialsAccepted: normalizeCenterMaterials(collectionCenter.materialsAccepted),
+    city: String(collectionCenter.city || user.address || "Tunisie").trim(),
+    address: String(collectionCenter.address || user.address || collectionCenter.city || "Tunisie").trim(),
+    openingHours: String(collectionCenter.openingHours || "9:00 AM - 6:00 PM").trim(),
+    district: String(collectionCenter.district || "").trim(),
+    capacityPerDayKg: Number(collectionCenter.capacityPerDayKg) || 1000,
+    description: String(collectionCenter.description || "").trim(),
+    externalSource,
+    externalSourceId: String(collectionCenter.externalSourceId || "").trim(),
+    latitude: Number.isFinite(parsedLatitude) ? parsedLatitude : null,
+    longitude: Number.isFinite(parsedLongitude) ? parsedLongitude : null,
+  };
+};
+
+const upsertCenterProfileForUser = async (user, passwordHash, collectionCenter = {}) => {
+  const centerPayload = buildCenterPayloadFromRegistration(user, passwordHash, collectionCenter);
+
+  if (!centerPayload.centerName || !centerPayload.managerName) {
+    throw new Error("Informations du centre manquantes");
+  }
+
+  if (centerPayload.externalSource && centerPayload.externalSourceId) {
+    const duplicateLink = await RecyclingCenter.findOne({
+      externalSource: centerPayload.externalSource,
+      externalSourceId: centerPayload.externalSourceId,
+      email: { $ne: centerPayload.email },
+    })
+      .select("_id")
+      .lean();
+
+    if (duplicateLink) {
+      const error = new Error("Ce centre externe est déjà lié à un autre compte EcoScan.");
+      error.statusCode = 409;
+      throw error;
+    }
+  }
+
+  const existingCenter = await RecyclingCenter.findOne({ email: centerPayload.email });
+  if (existingCenter) {
+    await RecyclingCenter.updateOne({ _id: existingCenter._id }, centerPayload);
+    return;
+  }
+
+  await RecyclingCenter.create({
+    ...centerPayload,
+    registrationNumber: `AUTO-${Date.now()}-${user._id.toString().slice(-6)}`,
+  });
+};
 
 const createAccessToken = (user) =>
   jwt.sign({ sub: user._id.toString(), role: user.role }, ACCESS_TOKEN_SECRET, {
@@ -197,6 +297,7 @@ const scanUpload = multer({ dest: path.join(__dirname, "uploads") }).single("pho
 app.use("/api/forum", authMiddleware, createForumRoutes(forumUpload));
 app.use("/api/scans", authMiddleware, createScanRoutes(scanUpload));
 app.use("/api/meetings", authMiddleware, createMeetingRoutes());
+app.use("/api/notifications", authMiddleware, createNotificationRoutes());
 app.use("/api/users", authMiddleware, createUserRoutes());
 app.use("/api/admin", authMiddleware, createAdminRoutes());
 
@@ -228,6 +329,7 @@ app.post("/api/auth/register", (req, res) => {
     accountType,
     phone,
     address,
+    collectionCenter,
   } = req.body;
 
   if (!firstName || !lastName || !email || !password) {
@@ -244,6 +346,30 @@ app.post("/api/auth/register", (req, res) => {
     const existingUser = await User.findOne({ email: normalizedEmail });
 
     if (existingUser) {
+      if (normalizedAccountType === "centre_de_collecte" && collectionCenter) {
+        const isValidPassword = await existingUser.comparePassword(password);
+        if (!isValidPassword) {
+          return res.status(409).json({ message: "Un compte existe deja avec cet email" });
+        }
+
+        try {
+          await upsertCenterProfileForUser(existingUser, existingUser.passwordHash, collectionCenter);
+        } catch (error) {
+          return res.status(error.statusCode || 400).json({
+            message: error.message || "Impossible de lier la fiche centre",
+          });
+        }
+
+        const tokens = await issueTokensForUser(existingUser);
+        setRefreshTokenCookie(res, tokens.refreshToken);
+
+        return res.status(200).json({
+          message: "Fiche centre liee au compte existant",
+          token: tokens.accessToken,
+          user: sanitizeUser(existingUser),
+        });
+      }
+
       return res.status(409).json({ message: "Un compte existe deja avec cet email" });
     }
 
@@ -258,6 +384,17 @@ app.post("/api/auth/register", (req, res) => {
       phone: phone || "",
       address: address || "",
     });
+
+    if (normalizedAccountType === "centre_de_collecte") {
+      try {
+        await upsertCenterProfileForUser(user, passwordHash, collectionCenter || {});
+      } catch (error) {
+        await User.deleteOne({ _id: user._id });
+        return res.status(error.statusCode || 400).json({
+          message: error.message || "Impossible de créer la fiche centre",
+        });
+      }
+    }
 
     const tokens = await issueTokensForUser(user);
     setRefreshTokenCookie(res, tokens.refreshToken);
@@ -416,6 +553,10 @@ app.get("/api/leaderboard", async (req, res) => {
 
 app.get("/api/centers/nearby", (req, res) => CenterController.getNearby(req, res));
 
+app.get("/api/anged-recycling-centers", (req, res) =>
+  CenterController.getAngedCenters(req, res)
+);
+
 // Get all recycling centers with filters
 app.get("/api/centers", async (req, res) => {
   try {
@@ -426,8 +567,9 @@ app.get("/api/centers", async (req, res) => {
       filter.city = { $regex: city, $options: "i" };
     }
 
-    if (material) {
+    if (material && material !== "recyclable") {
       const materialAliases = {
+        recyclage_specialise: "electronic",
         plastique: "plastic",
         verre: "glass",
         papier_carton: "paper",
@@ -446,7 +588,7 @@ app.get("/api/centers", async (req, res) => {
     const safeLimit = Number.isFinite(parsedLimit) ? parsedLimit : 100;
     const query = RecyclingCenter.find(filter)
       .select(
-        "centerName managerName city address district openingHours phone materialsAccepted description latitude longitude rating totalReviews capacityPerDayKg centerType registrationNumber"
+        "centerName managerName city address district openingHours phone email materialsAccepted description latitude longitude rating totalReviews capacityPerDayKg centerType registrationNumber externalSource externalSourceId"
       )
       .lean();
 
@@ -457,6 +599,19 @@ app.get("/api/centers", async (req, res) => {
     const centers = await query;
 
     console.log(`Found ${centers.length} centers`);
+
+    const centerEmails = centers
+      .map((center) => String(center.email || "").trim().toLowerCase())
+      .filter(Boolean);
+    const linkedCenterUsers = await User.find({
+      email: { $in: centerEmails },
+      accountType: "centre_de_collecte",
+    })
+      .select("_id email")
+      .lean();
+    const centerUserByEmail = new Map(
+      linkedCenterUsers.map((user) => [String(user.email || "").trim().toLowerCase(), user._id.toString()])
+    );
 
     const formattedCenters = centers.map((center) => ({
       _id: center._id,
@@ -476,6 +631,10 @@ app.get("/api/centers", async (req, res) => {
       totalReviews: center.totalReviews,
       capacityPerDayKg: center.capacityPerDayKg,
       centerType: center.centerType,
+      email: center.email,
+      externalSource: center.externalSource || "",
+      externalSourceId: center.externalSourceId || "",
+      canReceiveMeetings: centerUserByEmail.has(String(center.email || "").trim().toLowerCase()),
     }));
 
     res.json({ centers: formattedCenters, count: formattedCenters.length });

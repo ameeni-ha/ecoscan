@@ -1,10 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const authMiddleware = require("../middleware/auth");
 const NotificationService = require("../utils/NotificationService");
-
-// Middleware d'authentification pour toutes les routes
-router.use(authMiddleware);
 
 /**
  * GET /api/notifications
@@ -76,19 +72,6 @@ router.patch("/read-all", async (req, res) => {
 });
 
 /**
- * DELETE /api/notifications/:id
- * Supprimer une notification
- */
-router.delete("/:id", async (req, res) => {
-  try {
-    const result = await NotificationService.delete(req.params.id, req.user._id);
-    return res.json(result);
-  } catch (error) {
-    return res.status(500).json({ message: error.message || "Erreur serveur" });
-  }
-});
-
-/**
  * DELETE /api/notifications/clear-read
  * Supprimer toutes les notifications lues
  */
@@ -101,4 +84,17 @@ router.delete("/clear-read", async (req, res) => {
   }
 });
 
-module.exports = router;
+/**
+ * DELETE /api/notifications/:id
+ * Supprimer une notification
+ */
+router.delete("/:id", async (req, res) => {
+  try {
+    const result = await NotificationService.delete(req.params.id, req.user._id);
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({ message: error.message || "Erreur serveur" });
+  }
+});
+
+module.exports = () => router;

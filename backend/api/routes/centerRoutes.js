@@ -8,6 +8,8 @@ const createCenterRoutes = () => {
 
   router.get("/nearby", (req, res) => CenterController.getNearby(req, res));
 
+  router.get("/anged", (req, res) => CenterController.getAngedCenters(req, res));
+
   router.get("/osm", (req, res) => CenterController.getOSMCenters(req, res));
 
   router.get("/osm-recycling-centers", (req, res) => CenterController.getOSMCenters(req, res));

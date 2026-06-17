@@ -211,6 +211,26 @@ class NotificationService {
   }
 
   /**
+   * Notification pour demande de rendez-vous supprimée par un administrateur
+   */
+  static async notifyMeetingDeletedByAdmin(userId, centerName, reason = "") {
+    return this.create(
+      userId,
+      "meeting_cancelled",
+      "Demande de rendez-vous supprimée",
+      `Votre demande pour ${centerName} a été supprimée par un administrateur${
+        reason ? ` : ${reason}` : "."
+      }`,
+      null,
+      null,
+      {
+        centerName,
+        status: "deleted_by_admin",
+      }
+    );
+  }
+
+  /**
    * Notification pour nouvelle demande au centre
    */
   static async notifyNewMeetingRequest(centerId, userName, materialType) {

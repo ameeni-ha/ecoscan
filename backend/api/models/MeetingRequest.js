@@ -41,6 +41,11 @@ const meetingRequestSchema = new mongoose.Schema(
       ref: "Scan",
       default: null,
     },
+    scanIds: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: "Scan",
+      default: [],
+    },
     acceptedAt: {
       type: Date,
       default: null,

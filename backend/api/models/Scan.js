@@ -57,6 +57,12 @@ const scanSchema = new mongoose.Schema(
       trim: true,
       maxlength: 60,
     },
+    sortingClass: {
+      type: String,
+      default: "",
+      trim: true,
+      enum: ["", "recyclable", "non_recyclable", "recyclage_specialise"],
+    },
     detectionReason: {
       type: String,
       default: "",

@@ -153,6 +153,7 @@ export default function PostDetail() {
   const { token, user } = useAuth();
   const canComment = canForumComment(user);
   const canManageForum = user?.role === "admin";
+  const currentUserId = user?.id || user?._id;
 
   const [post, setPost] = useState(null);
   const [comments, setComments] = useState([]);
@@ -165,6 +166,8 @@ export default function PostDetail() {
   const [editingId, setEditingId] = useState(null);
   const [editContent, setEditContent] = useState("");
   const [editSending, setEditSending] = useState(false);
+  const [isEditingPost, setIsEditingPost] = useState(false);
+  const [postForm, setPostForm] = useState({ title: "", content: "", tags: "" });
 
   const childrenByParent = useMemo(() => {
     const map = new Map();
@@ -257,6 +260,45 @@ export default function PostDetail() {
     }
   };
 
+  const handleDeletePost = async () => {
+    if (!window.confirm("Êtes-vous sûr de vouloir supprimer ce post et ses commentaires ?")) return;
+    try {
+      await apiRequest(`/forum/posts/${id}`, { method: "DELETE", token });
+      navigate("/forum");
+    } catch (e) {
+      setError(e?.message || "Impossible de supprimer le post");
+    }
+  };
+
+  const startEditPost = () => {
+    if (!post) return;
+    setPostForm({
+      title: post.title || "",
+      content: post.content || "",
+      tags: Array.isArray(post.tags) ? post.tags.join(", ") : "",
+    });
+    setIsEditingPost(true);
+  };
+
+  const savePostEdit = async (event) => {
+    event.preventDefault();
+    setEditSending(true);
+    setError("");
+    try {
+      await apiRequest(`/forum/posts/${id}`, {
+        method: "PUT",
+        token,
+        body: postForm,
+      });
+      setIsEditingPost(false);
+      await load();
+    } catch (e) {
+      setError(e?.message || "Impossible de modifier le post");
+    } finally {
+      setEditSending(false);
+    }
+  };
+
   return (
     <div className="app-page">
       <div className="app-container forum-detail-layout">
@@ -271,7 +313,24 @@ export default function PostDetail() {
                 </div>
               ) : null}
             </div>
-            <button className="app-btn" type="button" onClick={() => navigate("/forum")}>← Liste</button>
+            <div className="app-row" style={{ gap: 8 }}>
+              {!loading && post && (canManageForum || post.author?.id === currentUserId) ? (
+                <>
+                  <button className="app-btn" type="button" onClick={startEditPost}>
+                    Modifier
+                  </button>
+                  <button
+                    className="app-btn"
+                    type="button"
+                    onClick={handleDeletePost}
+                    style={{ color: "#d32f2f" }}
+                  >
+                    Supprimer
+                  </button>
+                </>
+              ) : null}
+              <button className="app-btn" type="button" onClick={() => navigate("/forum")}>← Liste</button>
+            </div>
           </div>
           {error && <p className="form-error" style={{ marginTop: 12 }}>{error}</p>}
           {!loading && post?.images?.length ? (
@@ -283,7 +342,40 @@ export default function PostDetail() {
               ))}
             </div>
           ) : null}
-          {!loading && post ? (
+          {!loading && post && isEditingPost ? (
+            <form className="app-card post-body-card" style={{ marginTop: 14 }} onSubmit={savePostEdit}>
+              <h3 style={{ marginTop: 0, marginBottom: 8 }}>Modifier le post</h3>
+              <label style={{ fontWeight: 700, fontSize: 13 }}>Titre</label>
+              <input
+                className="app-input"
+                value={postForm.title}
+                onChange={(e) => setPostForm((current) => ({ ...current, title: e.target.value }))}
+                required
+              />
+              <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginTop: 10 }}>Contenu</label>
+              <textarea
+                className="app-input forum-textarea"
+                value={postForm.content}
+                onChange={(e) => setPostForm((current) => ({ ...current, content: e.target.value }))}
+                required
+              />
+              <label style={{ fontWeight: 700, fontSize: 13, display: "block", marginTop: 10 }}>Tags</label>
+              <input
+                className="app-input"
+                value={postForm.tags}
+                onChange={(e) => setPostForm((current) => ({ ...current, tags: e.target.value }))}
+                placeholder="plastique, collecte..."
+              />
+              <div className="app-row" style={{ marginTop: 10 }}>
+                <button className="app-btn app-btn-primary" type="submit" disabled={editSending}>
+                  {editSending ? "Sauvegarde..." : "Sauvegarder"}
+                </button>
+                <button className="app-btn" type="button" onClick={() => setIsEditingPost(false)}>
+                  Annuler
+                </button>
+              </div>
+            </form>
+          ) : !loading && post ? (
             <div className="app-card post-body-card" style={{ marginTop: 14 }}>
               <h3 style={{ marginTop: 0, marginBottom: 8 }}>Énoncé complet</h3>
               <p style={{ whiteSpace: "pre-wrap", lineHeight: 1.65, margin: 0 }}>{post.content}</p>
@@ -308,7 +400,7 @@ export default function PostDetail() {
                 setReplyDraft={setReplyDraft}
                 sendReply={sendReply}
                 sending={sending}
-                currentUserId={user?.id || user?._id}
+                currentUserId={currentUserId}
                 editingId={editingId}
                 setEditingId={setEditingId}
                 editContent={editContent}

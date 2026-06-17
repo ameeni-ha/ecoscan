@@ -6,6 +6,8 @@ import { formatDateFr } from "./utils/formatDateFr";
 import "./AdminDashboard.css";
 
 const MATERIAL_OPTIONS = [
+  "recyclable",
+  "recyclage_specialise",
   "plastique",
   "verre",
   "papier_carton",
@@ -14,6 +16,7 @@ const MATERIAL_OPTIONS = [
   "organique",
   "autre",
 ];
+const CENTER_MATERIAL_OPTIONS = ["plastic", "paper", "glass", "metal", "electronic", "textile", "organic", "mixed"];
 const ROLE_OPTIONS = ["client", "moderator", "admin"];
 const ACCOUNT_TYPE_OPTIONS = ["collecteur", "centre_de_collecte"];
 
@@ -27,13 +30,44 @@ export default function AdminDashboard() {
   const [centers, setCenters] = useState([]);
   const [posts, setPosts] = useState([]);
   const [scans, setScans] = useState([]);
+  const [meetings, setMeetings] = useState([]);
   const [expandedPostIds, setExpandedPostIds] = useState(() => new Set());
   const [editingUserId, setEditingUserId] = useState(null);
   const [userForm, setUserForm] = useState({
     firstName: "",
     lastName: "",
+    phone: "",
+    address: "",
     role: "client",
     accountType: "collecteur",
+  });
+  const [editingCenterId, setEditingCenterId] = useState(null);
+  const [centerForm, setCenterForm] = useState({
+    centerName: "",
+    managerName: "",
+    city: "",
+    address: "",
+    phone: "",
+    openingHours: "",
+    capacityPerDayKg: "",
+    materialsAccepted: "",
+    isVerified: false,
+  });
+  const [editingScanId, setEditingScanId] = useState(null);
+  const [scanForm, setScanForm] = useState({
+    label: "",
+    material: "autre",
+    sortingClass: "",
+    detectionReason: "",
+  });
+  const [editingMeetingId, setEditingMeetingId] = useState(null);
+  const [meetingForm, setMeetingForm] = useState({
+    status: "pending",
+    material: "",
+    preferredDate: "",
+    message: "",
+    rejectionReason: "",
+    notes: "",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -84,6 +118,9 @@ export default function AdminDashboard() {
         } else if (activeTab === "scans") {
           const data = await apiRequest("/admin/scans", { token });
           setScans(data.scans || []);
+        } else if (activeTab === "meetings") {
+          const data = await apiRequest("/admin/meetings", { token });
+          setMeetings(data.meetings || []);
         }
       } catch (e) {
         setError(e?.message || "Erreur chargement");
@@ -118,6 +155,8 @@ export default function AdminDashboard() {
     setUserForm({
       firstName: item.firstName || "",
       lastName: item.lastName || "",
+      phone: item.phone || "",
+      address: item.address || "",
       role: item.role || "client",
       accountType: item.accountType || "collecteur",
     });
@@ -128,6 +167,8 @@ export default function AdminDashboard() {
     setUserForm({
       firstName: "",
       lastName: "",
+      phone: "",
+      address: "",
       role: "client",
       accountType: "collecteur",
     });
@@ -148,7 +189,13 @@ export default function AdminDashboard() {
   };
 
   const handleDeleteUser = async (userId) => {
-    if (!window.confirm("Supprimer cet utilisateur et ses contenus ?")) return;
+    if (
+      !window.confirm(
+        "Supprimer cet utilisateur ? La suppression sera refusée s'il possède déjà des scans. Ses demandes de rendez-vous seront retirées des centres."
+      )
+    ) {
+      return;
+    }
     try {
       await apiRequest(`/admin/users/${userId}`, { method: "DELETE", token });
       setUsers((current) => current.filter((item) => item.id !== userId));
@@ -202,17 +249,131 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleUpdateScanMaterial = async (scanId, material) => {
+  const openCenterEditForm = (center) => {
+    setEditingCenterId(center.id);
+    setCenterForm({
+      centerName: center.centerName || center.name || "",
+      managerName: center.managerName || center.manager || "",
+      city: center.city || "",
+      address: center.address || "",
+      phone: center.phone || "",
+      openingHours: center.openingHours || "",
+      capacityPerDayKg: String(center.capacityPerDayKg || ""),
+      materialsAccepted: (center.materials || []).join(", "),
+      isVerified: Boolean(center.verified),
+    });
+  };
+
+  const cancelCenterEdit = () => setEditingCenterId(null);
+
+  const handleSaveCenter = async (event) => {
+    event.preventDefault();
+    if (!editingCenterId) return;
     try {
-      await apiRequest(`/admin/scans/${scanId}`, {
+      await apiRequest(`/admin/centers/${editingCenterId}`, {
         method: "PATCH",
         token,
-        body: { material },
+        body: {
+          ...centerForm,
+          materialsAccepted: centerForm.materialsAccepted
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean),
+        },
+      });
+      const data = await apiRequest("/admin/centers", { token });
+      setCenters(data.centers || []);
+      cancelCenterEdit();
+    } catch (e) {
+      setError(e?.message || "Erreur modification centre");
+    }
+  };
+
+  const openScanEditForm = (scan) => {
+    setEditingScanId(scan.id);
+    setScanForm({
+      label: scan.label || "",
+      material: scan.material || "autre",
+      sortingClass: scan.sortingClass || "",
+      detectionReason: scan.detectionReason || "",
+    });
+  };
+
+  const cancelScanEdit = () => setEditingScanId(null);
+
+  const handleSaveScan = async (event) => {
+    event.preventDefault();
+    if (!editingScanId) return;
+    try {
+      await apiRequest(`/admin/scans/${editingScanId}`, {
+        method: "PATCH",
+        token,
+        body: scanForm,
       });
       const data = await apiRequest("/admin/scans", { token });
       setScans(data.scans || []);
+      cancelScanEdit();
     } catch (e) {
       setError(e?.message || "Erreur modification scan");
+    }
+  };
+
+  const openMeetingEditForm = (meeting) => {
+    setEditingMeetingId(meeting.id);
+    const preferredDate = meeting.preferredDate ? new Date(meeting.preferredDate) : null;
+    if (preferredDate && !Number.isNaN(preferredDate.getTime())) {
+      preferredDate.setMinutes(preferredDate.getMinutes() - preferredDate.getTimezoneOffset());
+    }
+    setMeetingForm({
+      status: meeting.status || "pending",
+      material: meeting.material || "",
+      preferredDate: preferredDate && !Number.isNaN(preferredDate.getTime()) ? preferredDate.toISOString().slice(0, 16) : "",
+      message: meeting.message || "",
+      rejectionReason: meeting.rejectionReason || "",
+      notes: meeting.notes || "",
+    });
+  };
+
+  const cancelMeetingEdit = () => setEditingMeetingId(null);
+
+  const handleSaveMeeting = async (event) => {
+    event.preventDefault();
+    if (!editingMeetingId) return;
+    try {
+      await apiRequest(`/admin/meetings/${editingMeetingId}`, {
+        method: "PATCH",
+        token,
+        body: {
+          ...meetingForm,
+          preferredDate: meetingForm.preferredDate
+            ? new Date(meetingForm.preferredDate).toISOString()
+            : null,
+        },
+      });
+      const data = await apiRequest("/admin/meetings", { token });
+      setMeetings(data.meetings || []);
+      cancelMeetingEdit();
+    } catch (e) {
+      setError(e?.message || "Erreur modification rendez-vous");
+    }
+  };
+
+  const handleDeleteMeeting = async (meetingId) => {
+    const reason = window.prompt(
+      "Raison de suppression à envoyer au collecteur",
+      "Demande supprimée par l'administration."
+    );
+    if (reason === null) return;
+
+    try {
+      await apiRequest(`/admin/meetings/${meetingId}`, {
+        method: "DELETE",
+        token,
+        body: { reason },
+      });
+      setMeetings((current) => current.filter((meeting) => meeting.id !== meetingId));
+    } catch (e) {
+      setError(e?.message || "Erreur suppression rendez-vous");
     }
   };
 
@@ -362,6 +523,22 @@ export default function AdminDashboard() {
                   />
                 </div>
                 <div>
+                  <label>Téléphone</label>
+                  <input
+                    className="app-input"
+                    value={userForm.phone}
+                    onChange={(event) => handleUserFormChange("phone", event.target.value)}
+                  />
+                </div>
+                <div>
+                  <label>Adresse</label>
+                  <input
+                    className="app-input"
+                    value={userForm.address}
+                    onChange={(event) => handleUserFormChange("address", event.target.value)}
+                  />
+                </div>
+                <div>
                   <label>Rôle</label>
                   <select
                     className="app-input"
@@ -402,6 +579,99 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        {editingCenterId && (
+          <div className="admin-modal-backdrop" onClick={cancelCenterEdit}>
+            <div className="admin-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="admin-modal-header">
+                <div>
+                  <div className="badge">Modifier centre</div>
+                  <h2>{centerForm.centerName}</h2>
+                  <p className="app-muted">Tous les champs principaux du centre.</p>
+                </div>
+                <button className="admin-modal-close" type="button" onClick={cancelCenterEdit}>×</button>
+              </div>
+              <form className="admin-modal-form" onSubmit={handleSaveCenter}>
+                <input className="app-input" value={centerForm.centerName} onChange={(e) => setCenterForm((c) => ({ ...c, centerName: e.target.value }))} placeholder="Nom du centre" />
+                <input className="app-input" value={centerForm.managerName} onChange={(e) => setCenterForm((c) => ({ ...c, managerName: e.target.value }))} placeholder="Gestionnaire" />
+                <input className="app-input" value={centerForm.city} onChange={(e) => setCenterForm((c) => ({ ...c, city: e.target.value }))} placeholder="Ville" />
+                <input className="app-input" value={centerForm.address} onChange={(e) => setCenterForm((c) => ({ ...c, address: e.target.value }))} placeholder="Adresse" />
+                <input className="app-input" value={centerForm.phone} onChange={(e) => setCenterForm((c) => ({ ...c, phone: e.target.value }))} placeholder="Téléphone" />
+                <input className="app-input" value={centerForm.openingHours} onChange={(e) => setCenterForm((c) => ({ ...c, openingHours: e.target.value }))} placeholder="Horaires" />
+                <input className="app-input" type="number" value={centerForm.capacityPerDayKg} onChange={(e) => setCenterForm((c) => ({ ...c, capacityPerDayKg: e.target.value }))} placeholder="Capacité / jour (kg)" />
+                <input className="app-input" value={centerForm.materialsAccepted} onChange={(e) => setCenterForm((c) => ({ ...c, materialsAccepted: e.target.value }))} placeholder={`Matériaux: ${CENTER_MATERIAL_OPTIONS.join(", ")}`} />
+                <label className="app-muted">
+                  <input type="checkbox" checked={centerForm.isVerified} onChange={(e) => setCenterForm((c) => ({ ...c, isVerified: e.target.checked }))} /> Centre vérifié
+                </label>
+                <div className="admin-modal-actions">
+                  <button className="app-btn" type="button" onClick={cancelCenterEdit}>Annuler</button>
+                  <button className="app-btn app-btn-primary" type="submit">Enregistrer</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingScanId && (
+          <div className="admin-modal-backdrop" onClick={cancelScanEdit}>
+            <div className="admin-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="admin-modal-header">
+                <div>
+                  <div className="badge">Modifier scan</div>
+                  <h2>{scanForm.label || "Scan"}</h2>
+                  <p className="app-muted">Objet détecté, matière, classe et raison.</p>
+                </div>
+                <button className="admin-modal-close" type="button" onClick={cancelScanEdit}>×</button>
+              </div>
+              <form className="admin-modal-form" onSubmit={handleSaveScan}>
+                <input className="app-input" value={scanForm.label} onChange={(e) => setScanForm((c) => ({ ...c, label: e.target.value }))} placeholder="Objet / label" />
+                <select className="app-input" value={scanForm.material} onChange={(e) => setScanForm((c) => ({ ...c, material: e.target.value }))}>
+                  {MATERIAL_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+                <select className="app-input" value={scanForm.sortingClass} onChange={(e) => setScanForm((c) => ({ ...c, sortingClass: e.target.value }))}>
+                  <option value="">Classe non précisée</option>
+                  <option value="recyclable">recyclable</option>
+                  <option value="non_recyclable">non_recyclable</option>
+                  <option value="recyclage_specialise">recyclage_specialise</option>
+                </select>
+                <textarea className="app-input" value={scanForm.detectionReason} onChange={(e) => setScanForm((c) => ({ ...c, detectionReason: e.target.value }))} placeholder="Raison / note admin" />
+                <div className="admin-modal-actions">
+                  <button className="app-btn" type="button" onClick={cancelScanEdit}>Annuler</button>
+                  <button className="app-btn app-btn-primary" type="submit">Enregistrer</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {editingMeetingId && (
+          <div className="admin-modal-backdrop" onClick={cancelMeetingEdit}>
+            <div className="admin-modal" onClick={(event) => event.stopPropagation()}>
+              <div className="admin-modal-header">
+                <div>
+                  <div className="badge">Modifier rendez-vous</div>
+                  <h2>Demande de rendez-vous</h2>
+                  <p className="app-muted">Statut, matière, date, message et notes.</p>
+                </div>
+                <button className="admin-modal-close" type="button" onClick={cancelMeetingEdit}>×</button>
+              </div>
+              <form className="admin-modal-form" onSubmit={handleSaveMeeting}>
+                <select className="app-input" value={meetingForm.status} onChange={(e) => setMeetingForm((c) => ({ ...c, status: e.target.value }))}>
+                  {["pending", "accepted", "rejected", "cancelled"].map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+                <input className="app-input" value={meetingForm.material} onChange={(e) => setMeetingForm((c) => ({ ...c, material: e.target.value }))} placeholder="Matière" />
+                <input className="app-input" type="datetime-local" value={meetingForm.preferredDate} onChange={(e) => setMeetingForm((c) => ({ ...c, preferredDate: e.target.value }))} />
+                <textarea className="app-input" value={meetingForm.message} onChange={(e) => setMeetingForm((c) => ({ ...c, message: e.target.value }))} placeholder="Message collecteur" />
+                <textarea className="app-input" value={meetingForm.rejectionReason} onChange={(e) => setMeetingForm((c) => ({ ...c, rejectionReason: e.target.value }))} placeholder="Raison du refus" />
+                <textarea className="app-input" value={meetingForm.notes} onChange={(e) => setMeetingForm((c) => ({ ...c, notes: e.target.value }))} placeholder="Notes admin/centre" />
+                <div className="admin-modal-actions">
+                  <button className="app-btn" type="button" onClick={cancelMeetingEdit}>Annuler</button>
+                  <button className="app-btn app-btn-primary" type="submit">Enregistrer</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* Navigation par onglets */}
         <div className="admin-tabs">
           <button
@@ -433,6 +703,12 @@ export default function AdminDashboard() {
             onClick={() => setActiveTab("scans")}
           >
             📸 Scans ({stats?.totalScans || 0})
+          </button>
+          <button
+            className={`admin-tab ${activeTab === "meetings" ? "active" : ""}`}
+            onClick={() => setActiveTab("meetings")}
+          >
+            📅 Rendez-vous ({stats?.totalMeetings || 0})
           </button>
         </div>
 
@@ -492,6 +768,14 @@ export default function AdminDashboard() {
               <div className="stat-content">
                 <div className="stat-value">{stats.totalPoints}</div>
                 <div className="stat-label">Points distribués</div>
+              </div>
+            </div>
+
+            <div className="admin-stat-card">
+              <div className="stat-icon">📅</div>
+              <div className="stat-content">
+                <div className="stat-value">{stats.totalMeetings || 0}</div>
+                <div className="stat-label">Rendez-vous</div>
               </div>
             </div>
           </div>
@@ -614,13 +898,22 @@ export default function AdminDashboard() {
                         </td>
                         <td>{center.rating > 0 ? `⭐ ${center.rating}` : "-"}</td>
                         <td>
-                          <button
-                            className="admin-btn danger"
-                            onClick={() => handleDeleteCenter(center.id)}
-                            title="Supprimer"
-                          >
-                            🗑️
-                          </button>
+                          <div className="action-buttons">
+                            <button
+                              className="admin-btn"
+                              onClick={() => openCenterEditForm(center)}
+                              title="Modifier"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              className="admin-btn danger"
+                              onClick={() => handleDeleteCenter(center.id)}
+                              title="Supprimer"
+                            >
+                              🗑️
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -818,17 +1111,7 @@ export default function AdminDashboard() {
                       <tr key={scan.id}>
                         <td className="scan-label">{scan.label}</td>
                         <td>
-                          <select
-                            className="app-input"
-                            value={scan.material}
-                            onChange={(e) => handleUpdateScanMaterial(scan.id, e.target.value)}
-                          >
-                            {MATERIAL_OPTIONS.map((option) => (
-                              <option key={option} value={option}>
-                                {option}
-                              </option>
-                            ))}
-                          </select>
+                          <span className="material-badge">{scan.material}</span>
                         </td>
                         <td className="center-text">
                           <span className={`badge ${scan.recyclable ? "recyclable" : "non-recyclable"}`}>
@@ -844,13 +1127,90 @@ export default function AdminDashboard() {
                         </td>
                         <td>{formatDateFr(scan.createdAt)}</td>
                         <td>
-                          <button
-                            className="admin-btn danger"
-                            onClick={() => handleDeleteScan(scan.id)}
-                            title="Supprimer"
-                          >
-                            🗑️
-                          </button>
+                          <div className="action-buttons">
+                            <button className="admin-btn" onClick={() => openScanEditForm(scan)} title="Modifier">
+                              ✏️
+                            </button>
+                            <button
+                              className="admin-btn danger"
+                              onClick={() => handleDeleteScan(scan.id)}
+                              title="Supprimer"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Onglet Rendez-vous */}
+        {activeTab === "meetings" && (
+          <div className="admin-content">
+            {loading ? (
+              <p className="app-muted">Chargement...</p>
+            ) : meetings.length === 0 ? (
+              <p className="app-muted">Aucun rendez-vous</p>
+            ) : (
+              <div className="admin-table-wrapper">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Collecteur</th>
+                      <th>Centre</th>
+                      <th>Matière</th>
+                      <th>Date souhaitée</th>
+                      <th>Statut</th>
+                      <th>Créé le</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {meetings.map((meeting) => (
+                      <tr key={meeting.id}>
+                        <td>
+                          <div className="author-info">
+                            <div className="author-name">{meeting.requester?.name || "-"}</div>
+                            <div className="author-email">{meeting.requester?.email}</div>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="author-info">
+                            <div className="author-name">{meeting.center?.name || "-"}</div>
+                            <div className="author-email">{meeting.center?.city || meeting.center?.email}</div>
+                          </div>
+                        </td>
+                        <td>{meeting.material || "-"}</td>
+                        <td>{meeting.preferredDate ? formatDateFr(meeting.preferredDate) : "-"}</td>
+                        <td>
+                          <span className={`badge ${meeting.status === "pending" ? "hidden" : "published"}`}>
+                            {meeting.status}
+                          </span>
+                        </td>
+                        <td>{formatDateFr(meeting.createdAt)}</td>
+                        <td>
+                          <div className="action-buttons">
+                            <button className="admin-btn" onClick={() => openMeetingEditForm(meeting)} title="Modifier">
+                              ✏️
+                            </button>
+                            <button
+                              className="admin-btn danger"
+                              onClick={() => handleDeleteMeeting(meeting.id)}
+                              disabled={meeting.status !== "pending"}
+                              title={
+                                meeting.status === "pending"
+                                  ? "Supprimer et notifier le collecteur"
+                                  : "Seules les demandes en cours peuvent être supprimées"
+                              }
+                            >
+                              🗑️
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}

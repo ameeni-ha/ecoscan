@@ -1,82 +1,60 @@
 {
   "classes": {
-    "battery": {
-      "label": "Pile / batterie",
-      "material": "electronique",
-      "recyclable": true,
-      "reason": "Les piles et batteries doivent être déposées en point de collecte spécialisé."
-    },
-    "plastique": {
-      "label": "Plastique",
+    "plastique_recyclable": {
+      "label": "Plastique - recyclable",
       "material": "plastique",
+      "sortingClass": "recyclable",
       "recyclable": true,
-      "reason": "Le modèle déchets a reconnu un objet en plastique recyclable."
+      "reason": "Le modèle classe cet objet comme plastique recyclable."
     },
-    "bouteille_plastique": {
-      "label": "Bouteille plastique",
-      "material": "plastique",
-      "recyclable": true,
-      "reason": "Les bouteilles PET/PEHD propres sont recyclables."
-    },
-    "cardboard": {
-      "label": "Carton",
-      "material": "papier_carton",
-      "recyclable": true,
-      "reason": "Le carton propre et sec est recyclable."
-    },
-    "clothes": {
-      "label": "Vêtements",
-      "material": "autre",
-      "recyclable": false,
-      "reason": "Les vêtements doivent être orientés vers don, réemploi ou collecte textile spécialisée."
-    },
-    "verre": {
-      "label": "Verre",
+    "verre_recyclable": {
+      "label": "Verre - recyclable",
       "material": "verre",
+      "sortingClass": "recyclable",
       "recyclable": true,
-      "reason": "Le modèle déchets a reconnu un objet en verre recyclable."
+      "reason": "Le modèle classe cet objet comme verre recyclable."
     },
-    "papier_carton": {
-      "label": "Papier / carton",
+    "papier_carton_recyclable": {
+      "label": "Papier / carton - recyclable",
       "material": "papier_carton",
+      "sortingClass": "recyclable",
       "recyclable": true,
-      "reason": "Le modèle déchets a reconnu du papier ou carton recyclable."
+      "reason": "Le modèle classe cet objet comme papier ou carton recyclable."
     },
-    "metal": {
-      "label": "Métal",
+    "metal_recyclable": {
+      "label": "Métal - recyclable",
       "material": "metal",
+      "sortingClass": "recyclable",
       "recyclable": true,
-      "reason": "Le modèle déchets a reconnu un objet métallique recyclable."
+      "reason": "Le modèle classe cet objet comme métal recyclable."
     },
-    "electronique": {
-      "label": "Électronique",
-      "material": "electronique",
-      "recyclable": true,
-      "reason": "Les appareils électroniques doivent être déposés en point spécialisé."
-    },
-    "organique": {
-      "label": "Organique",
+    "organique_recyclable": {
+      "label": "Organique - recyclable",
       "material": "organique",
+      "sortingClass": "recyclable",
       "recyclable": true,
-      "reason": "Le modèle déchets a reconnu un déchet organique compostable."
+      "reason": "Le modèle classe cet objet comme déchet organique valorisable."
     },
-    "non_recyclable": {
-      "label": "Non recyclable",
-      "material": "autre",
-      "recyclable": false,
-      "reason": "Le modèle déchets a reconnu un objet non recyclable ou hors filière."
+    "electronique_recyclage_specialise": {
+      "label": "Électronique - recyclage spécialisé",
+      "material": "electronique",
+      "sortingClass": "recyclage_specialise",
+      "recyclable": true,
+      "reason": "Le modèle classe cet objet comme électronique à déposer en filière spécialisée."
     },
-    "shoes": {
-      "label": "Chaussures",
-      "material": "autre",
-      "recyclable": false,
-      "reason": "Les chaussures doivent être orientées vers don, réemploi ou collecte textile spécialisée."
+    "batterie_recyclage_specialise": {
+      "label": "Pile / batterie - recyclage spécialisé",
+      "material": "electronique",
+      "sortingClass": "recyclage_specialise",
+      "recyclable": true,
+      "reason": "Le modèle classe cet objet comme pile ou batterie à déposer en point spécialisé."
     },
-    "trash": {
-      "label": "Déchet non recyclable",
+    "autre_non_recyclable": {
+      "label": "Autre - non recyclable",
       "material": "autre",
+      "sortingClass": "non_recyclable",
       "recyclable": false,
-      "reason": "Le modèle déchets a reconnu un déchet à jeter ou à vérifier selon les consignes locales."
+      "reason": "Le modèle classe cet objet comme non recyclable."
     }
   }
 }

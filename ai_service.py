@@ -44,6 +44,19 @@ def get_labels():
     return list(labels)
 
 
+def get_class_details(raw_label):
+    config = class_config.get(raw_label, {})
+    material = config.get("material") or "autre"
+
+    return {
+        "rawLabel": raw_label,
+        "label": config.get("label") or raw_label or "Objet detecte",
+        "material": material,
+        "recyclable": bool(config.get("recyclable")) and material != "autre",
+        "reason": config.get("reason") or "Matiere estimee par le modele dechets EcoScan.",
+    }
+
+
 def load_assets():
     global model, metadata, class_config
 
@@ -113,18 +126,53 @@ def aggregate_crop_scores(batch_scores, crop_names):
     return scores, consensus
 
 
-def classify_label(raw_label, accepted, status):
-    config = class_config.get(raw_label, {})
+def aggregate_material_scores(scores, labels):
+    """Regroupe les classes qui representent la meme matiere.
+
+    Le modele peut partager la confiance entre classes proches. Pour la
+    decision de tri, la matiere agregee est plus fiable que la meilleure
+    classe seule.
+    """
+    material_scores = {}
+    material_best = {}
+
+    for index, raw_label in enumerate(labels):
+        score = float(scores[index])
+        details = get_class_details(raw_label)
+        material = details["material"]
+        material_scores[material] = material_scores.get(material, 0.0) + score
+
+        current_best = material_best.get(material)
+        if current_best is None or score > current_best["score"]:
+            material_best[material] = {**details, "score": score}
+
+    ranked_materials = sorted(material_scores.items(), key=lambda item: item[1], reverse=True)
+    if not ranked_materials:
+        return None
+
+    best_material, best_score = ranked_materials[0]
+    second_score = ranked_materials[1][1] if len(ranked_materials) > 1 else 0.0
+    best_class = material_best[best_material]
 
     return {
-        "rawLabel": raw_label,
-        "label": (config.get("label") or raw_label or "Objet detecte") if accepted else "Objet a verifier",
-        "material": (config.get("material") or "autre") if accepted else "autre",
-        "recyclable": bool(config.get("recyclable")) and accepted,
+        **best_class,
+        "materialScore": float(best_score),
+        "materialMargin": float(best_score - second_score),
+    }
+
+
+def classify_label(classification, accepted, status):
+    details = classification or get_class_details("")
+
+    return {
+        "rawLabel": details["rawLabel"],
+        "label": details["label"] if accepted else "Objet a verifier",
+        "material": details["material"] if accepted else "autre",
+        "recyclable": details["recyclable"] and accepted,
         "reason": (
-            config.get("reason")
+            details["reason"]
             if accepted
-            else "Le modele hesite ou confond plusieurs classes. Rapprochez l'objet, centrez-le et reprenez la photo."
+            else "Le modele hesite ou confond plusieurs matieres. Rapprochez l'objet, centrez-le et reprenez la photo."
         ),
         "detectionStatus": status,
     }
@@ -177,20 +225,23 @@ def predict():
 
         ranked_indices = np.argsort(scores)[::-1]
         best_index = int(ranked_indices[0])
-        raw_label = labels[best_index]
-        score = float(scores[best_index])
+        best_class_score = float(scores[best_index])
+        material_result = aggregate_material_scores(scores, labels)
+        raw_label = material_result["rawLabel"] if material_result else labels[best_index]
+        score = float(material_result["materialScore"]) if material_result else best_class_score
         confidence = round(score * 100)
         second_score = float(scores[int(ranked_indices[1])]) if len(ranked_indices) > 1 else 0.0
-        margin = score - second_score
+        class_margin = best_class_score - second_score
+        margin = float(material_result["materialMargin"]) if material_result else class_margin
         accepted = score >= MIN_CONFIDENCE and margin >= MIN_MARGIN and consensus >= 0.4
         status = (
-            "python_keras_recognized"
+            "python_keras_material_recognized"
             if accepted
             else "python_keras_ambiguous"
             if score >= MIN_CONFIDENCE
             else "python_keras_low_confidence"
         )
-        classification = classify_label(raw_label, accepted, status)
+        classification = classify_label(material_result, accepted, status)
         top_predictions = [
             {
                 "label": labels[int(index)],
@@ -210,6 +261,8 @@ def predict():
                 "confidence": confidence,
                 "score": score,
                 "margin": margin,
+                "classScore": best_class_score,
+                "classMargin": class_margin,
                 "consensus": consensus,
                 "topPredictions": top_predictions,
                 "detectionStatus": classification["detectionStatus"],

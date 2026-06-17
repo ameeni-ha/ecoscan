@@ -9,22 +9,18 @@ import json
 import shutil
 import numpy as np
 import tensorflow as tf
+from PIL import Image, UnidentifiedImageError
 
 # Configuration
 CLASS_NAMES = [
-    "battery",
-    "plastique",
-    "bouteille_plastique",
-    "cardboard",
-    "clothes",
-    "verre",
-    "papier_carton",
-    "metal",
-    "electronique",
-    "organique",
-    "non_recyclable",
-    "shoes",
-    "trash"
+    "plastique_recyclable",
+    "verre_recyclable",
+    "papier_carton_recyclable",
+    "metal_recyclable",
+    "organique_recyclable",
+    "electronique_recyclage_specialise",
+    "batterie_recyclage_specialise",
+    "autre_non_recyclable"
 ]
 
 IMG_SIZE = 224
@@ -32,7 +28,10 @@ BATCH_SIZE = 32
 EPOCHS = 50
 LEARNING_RATE = 0.001
 DATASET_PATH = "waste_dataset"
+INVALID_DATASET_PATH = "waste_dataset_invalid"
 MODEL_OUTPUT_PATH = "public/models/waste-classifier"
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
 
 def create_directory_structure():
     """Crée la structure des répertoires pour le dataset."""
@@ -57,6 +56,56 @@ def download_sample_dataset():
     print("   Exemple: waste_dataset/plastique/image1.jpg")
     print("   Exemple: waste_dataset/verre/image2.jpg")
     print("\n🔄 Pour l'instant, le script utilisera des données synthétiques de démonstration")
+
+def _move_invalid_image(file_path, class_name):
+    """Déplace une image illisible hors du dataset pour éviter l'arrêt de l'entraînement."""
+    destination_dir = os.path.join(INVALID_DATASET_PATH, class_name)
+    os.makedirs(destination_dir, exist_ok=True)
+
+    base_name = os.path.basename(file_path)
+    destination_path = os.path.join(destination_dir, base_name)
+    name, ext = os.path.splitext(base_name)
+    counter = 1
+
+    while os.path.exists(destination_path):
+        destination_path = os.path.join(destination_dir, f"{name}_{counter}{ext}")
+        counter += 1
+
+    shutil.move(file_path, destination_path)
+    return destination_path
+
+def validate_dataset_images():
+    """Vérifie les images du dataset et retire les fichiers corrompus."""
+    invalid_images = []
+
+    for class_name in CLASS_NAMES:
+        class_path = os.path.join(DATASET_PATH, class_name)
+        if not os.path.isdir(class_path):
+            continue
+
+        for root, _, files in os.walk(class_path):
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                _, ext = os.path.splitext(file_name)
+
+                if ext.lower() not in IMAGE_EXTENSIONS:
+                    continue
+
+                try:
+                    with Image.open(file_path) as img:
+                        img.verify()
+                except (UnidentifiedImageError, OSError, ValueError):
+                    moved_path = _move_invalid_image(file_path, class_name)
+                    invalid_images.append((file_path, moved_path))
+
+    if invalid_images:
+        print(f"⚠️  {len(invalid_images)} image(s) corrompue(s) déplacée(s) dans {INVALID_DATASET_PATH}:")
+        for original_path, moved_path in invalid_images[:20]:
+            print(f"   - {original_path} -> {moved_path}")
+        if len(invalid_images) > 20:
+            print(f"   ... et {len(invalid_images) - 20} autre(s)")
+    else:
+        print("✅ Aucune image corrompue détectée")
 
 def create_data_generators():
     """Crée les générateurs de données pour l'entraînement et la validation."""
@@ -283,83 +332,61 @@ def create_classes_config():
     
     classes_config = {
         "classes": {
-            "battery": {
-                "label": "Pile / batterie",
-                "material": "electronique",
-                "recyclable": True,
-                "reason": "Les piles et batteries doivent être déposées en point de collecte spécialisé."
-            },
-            "plastique": {
-                "label": "Plastique",
+            "plastique_recyclable": {
+                "label": "Plastique - recyclable",
                 "material": "plastique",
+                "sortingClass": "recyclable",
                 "recyclable": True,
-                "reason": "Le modèle déchets a reconnu un objet en plastique recyclable."
+                "reason": "Le modèle classe cet objet comme plastique recyclable."
             },
-            "bouteille_plastique": {
-                "label": "Bouteille plastique",
-                "material": "plastique",
-                "recyclable": True,
-                "reason": "Les bouteilles PET/PEHD propres sont recyclables."
-            },
-            "cardboard": {
-                "label": "Carton",
-                "material": "papier_carton",
-                "recyclable": True,
-                "reason": "Le carton propre et sec est recyclable."
-            },
-            "clothes": {
-                "label": "Vêtements",
-                "material": "autre",
-                "recyclable": False,
-                "reason": "Les vêtements doivent être orientés vers don, réemploi ou collecte textile spécialisée."
-            },
-            "verre": {
-                "label": "Verre",
+            "verre_recyclable": {
+                "label": "Verre - recyclable",
                 "material": "verre",
+                "sortingClass": "recyclable",
                 "recyclable": True,
-                "reason": "Le modèle déchets a reconnu un objet en verre recyclable."
+                "reason": "Le modèle classe cet objet comme verre recyclable."
             },
-            "papier_carton": {
-                "label": "Papier / carton",
+            "papier_carton_recyclable": {
+                "label": "Papier / carton - recyclable",
                 "material": "papier_carton",
+                "sortingClass": "recyclable",
                 "recyclable": True,
-                "reason": "Le modèle déchets a reconnu du papier ou carton recyclable."
+                "reason": "Le modèle classe cet objet comme papier ou carton recyclable."
             },
-            "metal": {
-                "label": "Métal",
+            "metal_recyclable": {
+                "label": "Métal - recyclable",
                 "material": "metal",
+                "sortingClass": "recyclable",
                 "recyclable": True,
-                "reason": "Le modèle déchets a reconnu un objet métallique recyclable."
+                "reason": "Le modèle classe cet objet comme métal recyclable."
             },
-            "electronique": {
-                "label": "Électronique",
-                "material": "electronique",
-                "recyclable": True,
-                "reason": "Les appareils électroniques doivent être déposés en point spécialisé."
-            },
-            "organique": {
-                "label": "Organique",
+            "organique_recyclable": {
+                "label": "Organique - recyclable",
                 "material": "organique",
+                "sortingClass": "recyclable",
                 "recyclable": True,
-                "reason": "Le modèle déchets a reconnu un déchet organique compostable."
+                "reason": "Le modèle classe cet objet comme déchet organique valorisable."
             },
-            "non_recyclable": {
-                "label": "Non recyclable",
-                "material": "autre",
-                "recyclable": False,
-                "reason": "Le modèle déchets a reconnu un objet non recyclable ou hors filière."
+            "electronique_recyclage_specialise": {
+                "label": "Électronique - recyclage spécialisé",
+                "material": "electronique",
+                "sortingClass": "recyclage_specialise",
+                "recyclable": True,
+                "reason": "Le modèle classe cet objet comme électronique à déposer en filière spécialisée."
             },
-            "shoes": {
-                "label": "Chaussures",
-                "material": "autre",
-                "recyclable": False,
-                "reason": "Les chaussures doivent être orientées vers don, réemploi ou collecte textile spécialisée."
+            "batterie_recyclage_specialise": {
+                "label": "Pile / batterie - recyclage spécialisé",
+                "material": "electronique",
+                "sortingClass": "recyclage_specialise",
+                "recyclable": True,
+                "reason": "Le modèle classe cet objet comme pile ou batterie à déposer en point spécialisé."
             },
-            "trash": {
-                "label": "Déchet non recyclable",
+            "autre_non_recyclable": {
+                "label": "Autre - non recyclable",
                 "material": "autre",
+                "sortingClass": "non_recyclable",
                 "recyclable": False,
-                "reason": "Le modèle déchets a reconnu un déchet à jeter ou à vérifier selon les consignes locales."
+                "reason": "Le modèle classe cet objet comme non recyclable."
             }
         }
     }
@@ -383,6 +410,9 @@ def main():
         
         # Instructions pour le dataset
         download_sample_dataset()
+
+        # Retirer les images corrompues avant que Keras lise le dataset
+        validate_dataset_images()
         
         # Créer les générateurs de données
         train_generator, validation_generator = create_data_generators()

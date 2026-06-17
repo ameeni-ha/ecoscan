@@ -7,6 +7,8 @@ import { formatDateFr } from "./utils/formatDateFr";
 import { canUseScan } from "./utils/permissions";
 
 const MATERIAL_LABEL = {
+  recyclable: "Recyclable",
+  recyclage_specialise: "Recyclage spécialisé",
   plastique: "Plastique",
   verre: "Verre",
   papier_carton: "Papier / carton",
@@ -14,6 +16,14 @@ const MATERIAL_LABEL = {
   electronique: "Électronique",
   organique: "Organique",
   autre: "Autre / non recyclable",
+};
+
+const formatRecyclingStatus = (scan) => {
+  if (scan?.sortingClass === "recyclage_specialise" || scan?.material === "recyclage_specialise") {
+    return "♻️ Recyclage spécialisé";
+  }
+  if (scan?.sortingClass === "non_recyclable") return "⚠️ Non recyclable (ou à confirmer)";
+  return scan?.recyclable ? "♻️ Recyclable — à déposer proprement" : "⚠️ Non recyclable (ou à confirmer)";
 };
 
 export default function ScanResult() {
@@ -119,7 +129,9 @@ export default function ScanResult() {
     const mt = MATERIAL_LABEL[scan?.material] || scan?.material || "matériau";
     const msg = `Suite au scan EcoScan « ${scan?.label || "objet"} » (${mt}).`;
     navigate(
-      `/rendez-vous?center=${encodeURIComponent(centerId)}&message=${encodeURIComponent(msg)}`,
+      `/rendez-vous?center=${encodeURIComponent(centerId)}&scanIds=${encodeURIComponent(
+        scan?.id || ""
+      )}&message=${encodeURIComponent(msg)}`,
     );
   };
 
@@ -138,7 +150,7 @@ export default function ScanResult() {
                   color: scan?.recyclable ? "#1b8f4f" : "#8a5a00",
                 }}
               >
-                {scan?.recyclable ? "♻️ Recyclable — à déposer proprement" : "⚠️ Non recyclable (ou à confirmer)"}
+                {formatRecyclingStatus(scan)}
               </div>
               <h2 style={{ margin: "12px 0 6px", fontSize: 24 }}>
                 Analyse : {scan?.label || "—"}
@@ -190,7 +202,13 @@ export default function ScanResult() {
                         color: "#fff",
                       }}
                     >
-                      {scan.recyclable ? "Recyclable" : "Non recyclable / vérif"}
+                      {scan.sortingClass === "recyclage_specialise" || scan.material === "recyclage_specialise"
+                        ? "Recyclage spécialisé"
+                        : scan.sortingClass === "non_recyclable"
+                        ? "Non recyclable / vérif"
+                        : scan.recyclable
+                        ? "Recyclable"
+                        : "Non recyclable / vérif"}
                     </div>
                     <div style={{ marginTop: 10, fontWeight: 700, color: scan.recyclable ? "#138047" : "#8a6d3d" }}>
                       +{scan.points} pts

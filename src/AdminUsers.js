@@ -44,7 +44,13 @@ export default function AdminUsers() {
   };
 
   const deleteUser = async (id) => {
-    if (!window.confirm("Supprimer cet utilisateur et ses contenus ?")) return;
+    if (
+      !window.confirm(
+        "Supprimer cet utilisateur ? La suppression sera refusée s'il possède déjà des scans. Ses demandes de rendez-vous seront retirées des centres."
+      )
+    ) {
+      return;
+    }
     setError("");
     try {
       await apiRequest(`/admin/users/${id}`, { method: "DELETE", token });
@@ -133,6 +139,12 @@ export default function AdminUsers() {
                         style={{ color: "#d32f2f" }}
                         type="button"
                         onClick={() => deleteUser(u.id)}
+                        disabled={u.role === "admin"}
+                        title={
+                          u.role === "admin"
+                            ? "Un administrateur ne peut pas être supprimé"
+                            : "Supprimer"
+                        }
                       >
                         Supprimer
                       </button>

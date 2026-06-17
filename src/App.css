@@ -1147,6 +1147,40 @@ body {
   color: #fff;
 }
 
+.notification-nav-link {
+  position: relative;
+  min-width: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.notification-icon {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.notification-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #d93025;
+  color: #fff;
+  border: 2px solid #fff;
+  font-size: 10px;
+  font-weight: 900;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
 .nav-right {
   display: flex;
   gap: 8px;

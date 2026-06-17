@@ -2,8 +2,60 @@ const RecyclingCenter = require("../models/RecyclingCenter");
 const { haversineKm, centerAcceptsScanMaterial } = require("../utils/helpers");
 const { ALLOWED_MATERIALS } = require("../utils/constants");
 const { runOverpassQuery } = require("../utils/osm");
+const {
+  ANGED_AUTHORIZED_LISTS,
+  ANGED_OFFICIAL_FACILITIES,
+} = require("../data/angedRecyclingSources");
 
 class CenterController {
+  // Official ANGed sources and facilities available from public ANGed pages.
+  static async getAngedCenters(req, res) {
+    try {
+      const city = String(req.query.city || "").trim().toLowerCase();
+      const material = String(req.query.material || "").trim();
+      const materialAliases = {
+        recyclage_specialise: ["electronic"],
+        electronique: ["electronic"],
+        plastique: ["plastic"],
+        verre: ["glass"],
+        papier_carton: ["paper"],
+        metal: ["metal"],
+        organique: ["organic"],
+      };
+      const materialTags = materialAliases[material] || [];
+
+      const centers = ANGED_OFFICIAL_FACILITIES.filter((center) => {
+        const matchesCity =
+          !city ||
+          [center.city, center.district, center.address]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(city));
+        const matchesMaterial =
+          !materialTags.length ||
+          !center.materialsAccepted?.length ||
+          center.materialsAccepted.includes("mixed") ||
+          center.materialsAccepted.some((tag) => materialTags.includes(tag));
+        return matchesCity && matchesMaterial;
+      });
+
+      const officialLists = ANGED_AUTHORIZED_LISTS.filter((entry) => {
+        if (!materialTags.length) return true;
+        return entry.materialsAccepted.some((tag) => materialTags.includes(tag));
+      });
+
+      return res.json({
+        centers,
+        officialLists,
+        count: centers.length,
+        source: "anged",
+        note:
+          "Les listes de sociétés autorisées proviennent des pages publiques ANGed. Les coordonnées des installations ANGed sont approximatives lorsque le site ne publie pas de GPS exact.",
+      });
+    } catch (error) {
+      return res.status(500).json({ message: error.message || "Erreur serveur" });
+    }
+  }
+
   // Get all recycling centers with filters
   static async getCenters(req, res) {
     try {
@@ -14,13 +66,24 @@ class CenterController {
         filter.city = { $regex: city, $options: "i" };
       }
 
-      if (material) {
-        filter.materialsAccepted = { $in: [material] };
+      if (material && material !== "recyclable") {
+        const materialAliases = {
+          recyclage_specialise: ["electronic", "mixed"],
+          plastique: ["plastic"],
+          verre: ["glass"],
+          papier_carton: ["paper"],
+          metal: ["metal"],
+          electronique: ["electronic"],
+          organique: ["organic"],
+        };
+        filter.materialsAccepted = {
+          $in: materialAliases[material] || [material],
+        };
       }
 
       const centers = await RecyclingCenter.find(filter)
         .select(
-          "centerName managerName city address district openingHours phone materialsAccepted description latitude longitude rating totalReviews capacityPerDayKg centerType registrationNumber"
+          "centerName managerName city address district openingHours phone email materialsAccepted description latitude longitude rating totalReviews capacityPerDayKg centerType registrationNumber externalSource externalSourceId"
         )
         .limit(100)
         .lean();
@@ -35,6 +98,7 @@ class CenterController {
         district: center.district,
         openingHours: center.openingHours,
         phone: center.phone,
+        email: center.email,
         materialsAccepted: center.materialsAccepted,
         description: center.description,
         latitude: center.latitude,
@@ -43,6 +107,8 @@ class CenterController {
         totalReviews: center.totalReviews,
         capacityPerDayKg: center.capacityPerDayKg,
         centerType: center.centerType,
+        externalSource: center.externalSource || "",
+        externalSourceId: center.externalSourceId || "",
       }));
 
       res.json({ centers: formattedCenters, count: formattedCenters.length });
